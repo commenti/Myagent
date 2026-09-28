@@ -69,10 +69,17 @@ export class ResumeManagerError extends Error {
 // ------------------------------------------------------------------
 
 export class ResumeManager {
-  
   private readonly projectConfig: ProjectConfig;
 
-    this.homeConfig = opts.homeConfig;
+  constructor(opts: {
+    homeConfig: HomeConfig;
+    projectConfig: ProjectConfig;
+  }) {
+    // homeConfig is accepted for API symmetry with the other session
+    // modules. It is currently unused here, but keeping it in the
+    // constructor signature avoids breaking call sites (e.g. the
+    // convenience helper `detectResumable` at the bottom of this file).
+    void opts.homeConfig;
     this.projectConfig = opts.projectConfig;
   }
 
