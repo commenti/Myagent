@@ -2,7 +2,7 @@
  * src/memory/SessionInstructions.ts
  * ---------------------------------
  * In-memory, session-scoped custom instructions.
- * They live only for the current process — never written to disk.
+ * Live only for the current process — never written to disk.
  */
 
 let sessionText = "";
