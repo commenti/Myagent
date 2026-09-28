@@ -36,7 +36,7 @@ import { getCapabilities } from "./CapabilityRegistry";
 const API_VERSION = "v1beta";
 const DEFAULT_TIMEOUT_MS = 120_000;
 const HANDSHAKE_TIMEOUT_MS = 20_000;
-const DEFAULT_MAX_OUTPUT = 4_096;
+
 
 // ------------------------------------------------------------------
 // Wire types (minimal subset we read)
