@@ -15,6 +15,12 @@ import { loadHomeConfig, type HomeConfig } from "./config/HomeConfig";
 import { loadProjectConfig, type ProjectConfig } from "./config/ProjectConfig";
 import { ResumeManager, type ResumeState } from "./session/ResumeManager";
 
+import { fileURLToPath } from "node:url";
+import { dirname } from "node:path";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
 
 function readVersion(): string {
   try {
@@ -141,16 +147,4 @@ async function run(argv: string[]): Promise<number> {
   }
 
   return 0;
-}
-
-
-// Direct-run: `node dist/index.js ...`
-if (require.main === module) {
-  main(process.argv.slice(2)).then(
-    (code) => process.exit(code),
-    (err) => {
-      process.stderr.write(String(err) + "\n");
-      process.exit(1);
-    }
-  );
 }
