@@ -49,6 +49,17 @@ import { SessionLog } from "../session/SessionLog";
 import { PermissionManager } from "../policy/PermissionManager";
 
 import { saveAndActivate } from "../commands/apiCommand";
+import { InstructionScopeMenu, type InstructionScope } from "./InstructionScopeMenu";
+import { InstructionEditor } from "./InstructionEditor";
+import {
+  loadInstructions,
+  setGlobalInstructions,
+  setProjectInstructions,
+} from "../memory/InstructionLoader";
+import {
+  getSessionInstructions,
+  setSessionInstructions,
+} from "../memory/SessionInstructions";
 
 // Slash command handlers.
 import { run as runApi } from "../commands/apiCommand";
@@ -198,6 +209,11 @@ export function Renderer(
   // Interactive /api form state.
   const [showApiForm, setShowApiForm] =
     useState<boolean>(false);
+
+  type InstructionPhase = "none" | "scope" | "editor";
+  const [instrPhase, setInstrPhase] = useState<InstructionPhase>("none");
+  const [instrScope, setInstrScope] = useState<InstructionScope | null>(null);
+  const [instrInitial, setInstrInitial] = useState<string>("");
 
   const startedAtRef =
     useRef<number>(Date.now());
@@ -387,6 +403,12 @@ export function Renderer(
               }`,
           });
 
+          return;
+        }
+
+        // /instruction with no args → scope menu + editor.
+        if (name === "instruction" && args.trim() === "") {
+          setInstrPhase("scope");
           return;
         }
 
@@ -657,6 +679,73 @@ export function Renderer(
       [makeContext]
     );
 
+  const handleInstructionScopePick = useCallback(
+    async (scope: InstructionScope) => {
+      setInstrScope(scope);
+      try {
+        if (scope === "session") {
+          setInstrInitial(getSessionInstructions());
+        } else {
+          const bundle = await loadInstructions(homeConfig, projectConfig);
+          setInstrInitial(scope === "global" ? bundle.global : bundle.project);
+        }
+      } catch (err) {
+        pushItem({
+          type: "error",
+          text:
+            "failed to load instructions: " +
+            (err instanceof Error ? err.message : String(err)),
+        });
+        setInstrInitial("");
+      }
+      setInstrPhase("editor");
+    },
+    [homeConfig, projectConfig, pushItem]
+  );
+
+  const handleInstructionSave = useCallback(
+    async (text: string) => {
+      const scope = instrScope;
+      if (!scope) return;
+      try {
+        if (scope === "session") {
+          setSessionInstructions(text);
+        } else if (scope === "project") {
+          await setProjectInstructions(projectConfig, text);
+        } else {
+          await setGlobalInstructions(homeConfig, text);
+        }
+        pushItem({
+          type: "tool-result",
+          name: "/instruction",
+          ok: true,
+          summary:
+            "saved " + scope + " instructions (" + text.length + " chars)",
+        });
+        setStatusLine("instructions saved (" + scope + ")");
+      } catch (err) {
+        pushItem({
+          type: "error",
+          text:
+            "failed to save instructions: " +
+            (err instanceof Error ? err.message : String(err)),
+        });
+        return;
+      }
+      setInstrPhase("none");
+      setInstrScope(null);
+      setInstrInitial("");
+    },
+    [instrScope, homeConfig, projectConfig, pushItem]
+  );
+
+  const handleInstructionCancel = useCallback(() => {
+    setInstrPhase("none");
+    setInstrScope(null);
+    setInstrInitial("");
+    pushItem({ type: "note", text: "instruction editor closed without saving" });
+  }, [pushItem]);
+
   // ----------------------------------------------------------------
   // Ctrl+C — Ink handles exit; we just log
   // ----------------------------------------------------------------
@@ -791,7 +880,19 @@ export function Renderer(
         flexDirection="column"
         marginTop={1}
       >
-        {showApiForm ? (
+        {instrPhase === "scope" ? (
+          <InstructionScopeMenu
+            onPick={(scope) => { void handleInstructionScopePick(scope); }}
+            onCancel={handleInstructionCancel}
+          />
+        ) : instrPhase === "editor" && instrScope ? (
+          <InstructionEditor
+            title={"Edit " + instrScope + " instructions"}
+            initialText={instrInitial}
+            onSave={(text) => { void handleInstructionSave(text); }}
+            onCancel={handleInstructionCancel}
+          />
+        ) : showApiForm ? (
           <ApiForm
             onSubmit={
               handleApiFormSubmit

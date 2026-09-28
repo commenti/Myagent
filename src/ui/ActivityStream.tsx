@@ -22,7 +22,7 @@
  */
 
 import React, { useEffect, useMemo, useState } from "react";
-import { Box, Text } from "ink";
+import { Box, Static, Text } from "ink";
 
 
 // ------------------------------------------------------------------
@@ -37,6 +37,8 @@ export type ActivityItem =
   | { readonly type: "file-edit"; readonly path: string; readonly preview: string; readonly added: number; readonly removed: number }
   | { readonly type: "terminal"; readonly chunk: string }
   | { readonly type: "note"; readonly text: string }
+  | { readonly type: "user-message"; readonly text: string }
+  | { readonly type: "assistant-message"; readonly text: string }
   | { readonly type: "error"; readonly text: string };
 
 export interface ActivityCounters {
@@ -52,6 +54,13 @@ export interface ActivityStreamProps {
   /** Max visible items (default 12, verbose raises to 30). */
   readonly maxVisible?: number;
   readonly counters?: ActivityCounters;
+  /**
+   * Text currently being streamed by the model (not yet committed). Shown in
+   * the live area, last few lines only. When streaming finishes, the caller
+   * should push a committed `assistant-message` item to `items` and clear
+   * this prop — the full text then lands in <Static> and stays in scrollback.
+   */
+  readonly liveText?: string;
 }
 
 interface Config {
@@ -79,6 +88,26 @@ const VERBOSE_CONFIG: Config = {
 
 const SPINNER_FRAMES = ["|", "/", "-", "\\"] as const;
 
+// ------------------------------------------------------------------
+// Color policy
+// ------------------------------------------------------------------
+// Respect NO_COLOR (https://no-color.org). All color props go through col().
+// Bright variants everywhere so text is readable on a black terminal.
+// Dark blue / dark red are never used.
+// ------------------------------------------------------------------
+
+const NO_COLOR: boolean =
+  typeof process.env.NO_COLOR === "string" && process.env.NO_COLOR.length > 0;
+
+function col(name: string): string | undefined {
+  return NO_COLOR ? undefined : name;
+}
+
+function dim(d = true): boolean {
+  return NO_COLOR ? false : d;
+}
+
+
 function useSpinner(active: boolean): string {
   const [frame, setFrame] = useState(0);
   useEffect(() => {
@@ -96,58 +125,60 @@ function useSpinner(active: boolean): string {
 // Component
 // ------------------------------------------------------------------
 
+const LIVE_MAX_LINES = 8;
+
 export function ActivityStream(props: ActivityStreamProps): React.ReactElement {
-  const {
-    items,
-    busy = false,
-    verbose = false,
-    counters,
-  } = props;
+  const { items, busy = false, verbose = false, counters, liveText } = props;
 
   const cfg = verbose ? VERBOSE_CONFIG : DEFAULT_CONFIG;
-  const maxVisible = props.maxVisible ?? cfg.maxVisible;
-
   const spinner = useSpinner(busy);
 
-  const visible = useMemo(() => {
-    if (items.length <= maxVisible) return items;
-    return items.slice(items.length - maxVisible);
-  }, [items, maxVisible]);
+  // Committed items → <Static>. Each is printed once and stays in the
+  // terminal's scrollback.
+  const committed = useMemo(() => items as readonly ActivityItem[], [items]);
 
-  const hidden = items.length - visible.length;
+  // Live streaming text — last few lines only.
+  const liveLines = useMemo(
+    () => (liveText ? liveText.split("\n") : []),
+    [liveText]
+  );
+  const liveShown = liveLines.slice(-LIVE_MAX_LINES);
+  const liveHidden = Math.max(0, liveLines.length - liveShown.length);
 
   return (
     <Box flexDirection="column">
+      {/* Completed items: printed once, persist in scrollback. */}
+      <Static items={committed}>
+        {(item, key) => <Item key={key} item={item} cfg={cfg} />}
+      </Static>
+
+      {/* Live streaming response (last few lines). */}
+      {liveShown.length > 0 && (
+        <Box flexDirection="column" paddingX={1}>
+          {liveHidden > 0 && (
+            <Text color={col("gray")} dimColor={dim()}>
+              {"... " + liveHidden + " earlier line(s) streaming ..."}
+            </Text>
+          )}
+          {liveShown.map((line, i) => (
+            <Text key={i} color={col("whiteBright")}>
+              {line.length === 0 ? " " : line}
+            </Text>
+          ))}
+        </Box>
+      )}
+
+      {/* Live status line: spinner + counters. Never grows. */}
       <Box paddingX={1}>
-        <Text color="gray" dimColor>
+        <Text color={col("gray")} dimColor={dim()}>
           {busy ? spinner + " working" : "- idle"}
         </Text>
         {counters && (
-          <Text color="gray" dimColor>
+          <Text color={col("gray")} dimColor={dim()}>
             {`   tokens: ${formatTokens(counters.inputTokens)} in / ${formatTokens(counters.outputTokens)} out   ${formatElapsed(counters.elapsedMs)}`}
           </Text>
         )}
       </Box>
-
-      {hidden > 0 && (
-        <Box paddingX={1}>
-          <Text color="gray" dimColor>
-            {`... ${hidden} earlier item(s) hidden ...`}
-          </Text>
-        </Box>
-      )}
-
-      {visible.length === 0 ? (
-        <Box paddingX={1}>
-          <Text color="gray" dimColor>
-            (no activity yet)
-          </Text>
-        </Box>
-      ) : (
-        visible.map((item, i) => (
-          <Item key={i} item={item} cfg={cfg} />
-        ))
-      )}
     </Box>
   );
 }
@@ -166,25 +197,57 @@ function Item(props: ItemProps): React.ReactElement {
   const { item, cfg } = props;
 
   switch (item.type) {
+    case "user-message":
+      return (
+        <Box paddingX={1} flexDirection="column">
+          <Text>
+            <Text color={col("greenBright")} bold>{"> "}</Text>
+            <Text color={col("greenBright")}>{clip(item.text, 4000)}</Text>
+          </Text>
+        </Box>
+      );
+
+    case "assistant-message":
+      return (
+        <Box paddingX={1} flexDirection="column">
+          <Text>
+            <Text color={col("cyan")} bold>{"< "}</Text>
+            <Text color={col("whiteBright")}>{clip(item.text, 8000)}</Text>
+          </Text>
+        </Box>
+      );
+
     case "thinking":
       return (
         <Box paddingX={1}>
-          <Text color="cyan">{"~ "}</Text>
-          <Text color="cyan" dimColor>
+          <Text color={col("cyan")}>{"~ "}</Text>
+          <Text color={col("cyan")} dimColor={dim()}>
             {item.label && item.label.length > 0 ? item.label : "thinking..."}
           </Text>
         </Box>
       );
 
     case "tool-call":
+      // Legacy: Renderer sometimes emits the user message as
+      // { type: "tool-call", name: "user", args: text }. Route it.
+      if (item.name === "user") {
+        return (
+          <Box paddingX={1} flexDirection="column">
+            <Text>
+              <Text color={col("greenBright")} bold>{"> "}</Text>
+              <Text color={col("greenBright")}>{clip(item.args ?? "", 4000)}</Text>
+            </Text>
+          </Box>
+        );
+      }
       return (
         <Box paddingX={1} flexDirection="column">
           <Text>
-            <Text color="blue">{"-> "}</Text>
-            <Text bold>{item.name}</Text>
+            <Text color={col("cyan")} bold>{"-> "}</Text>
+            <Text color={col("cyan")} bold>{item.name}</Text>
             {item.args && item.args.length > 0 ? (
-              <Text color="gray" dimColor>
-                {"  " + clip(item.args, 160)}
+              <Text color={col("gray")} dimColor={dim()}>
+                {"  " + clip(item.args, 200)}
               </Text>
             ) : null}
           </Text>
@@ -195,12 +258,12 @@ function Item(props: ItemProps): React.ReactElement {
       return (
         <Box paddingX={1} flexDirection="column">
           <Text>
-            <Text color={item.ok ? "green" : "red"}>
+            <Text color={col(item.ok ? "greenBright" : "redBright")}>
               {item.ok ? "<- ok  " : "<- fail"}
             </Text>
-            <Text bold>{item.name}</Text>
-            <Text color="gray" dimColor>
-              {"  " + clip(item.summary, 200)}
+            <Text color={col("cyan")} bold>{item.name}</Text>
+            <Text color={col("gray")} dimColor={dim()}>
+              {"  " + clip(item.summary, 300)}
             </Text>
           </Text>
         </Box>
@@ -209,11 +272,9 @@ function Item(props: ItemProps): React.ReactElement {
     case "file-read":
       return (
         <Box paddingX={1}>
-          <Text color="gray">
-            {"   read  "}
-          </Text>
-          <Text>{item.path}</Text>
-          <Text color="gray" dimColor>
+          <Text color={col("cyan")}>{"   read  "}</Text>
+          <Text color={col("whiteBright")}>{item.path}</Text>
+          <Text color={col("gray")} dimColor={dim()}>
             {`  (${item.lines} line${item.lines === 1 ? "" : "s"})`}
           </Text>
         </Box>
@@ -228,8 +289,8 @@ function Item(props: ItemProps): React.ReactElement {
     case "note":
       return (
         <Box paddingX={1}>
-          <Text color="gray" dimColor>
-            {"* " + clip(item.text, 300)}
+          <Text color={col("gray")} dimColor={dim()}>
+            {"* " + clip(item.text, 400)}
           </Text>
         </Box>
       );
@@ -237,7 +298,9 @@ function Item(props: ItemProps): React.ReactElement {
     case "error":
       return (
         <Box paddingX={1}>
-          <Text color="red">{"! " + clip(item.text, 300)}</Text>
+          <Text color={col("redBright")} bold>
+            {"! " + clip(item.text, 400)}
+          </Text>
         </Box>
       );
   }
@@ -258,21 +321,22 @@ function FileEdit(props: {
   return (
     <Box paddingX={1} flexDirection="column">
       <Box>
-        <Text color="yellow">{"   edit  "}</Text>
-        <Text>{item.path}</Text>
-        <Text color="green">{`  +${item.added}`}</Text>
-        <Text color="red">{` -${item.removed}`}</Text>
+        <Text color={col("cyan")}>{"   edit  "}</Text>
+        <Text color={col("whiteBright")}>{item.path}</Text>
+        <Text color={col("greenBright")}>{`  +${item.added}`}</Text>
+        <Text color={col("redBright")}>{` -${item.removed}`}</Text>
       </Box>
       {lines.map((line, i) => {
-        const color = line.startsWith("+ ")
-          ? "green"
+        const base = line.startsWith("+ ")
+          ? "greenBright"
           : line.startsWith("- ")
-          ? "red"
+          ? "redBright"
           : "gray";
-        const dim = color === "gray";
+        const color = col(base);
+        const isDim = base === "gray";
         return (
           <Box key={i} marginLeft={4}>
-            <Text color={color} dimColor={dim}>
+            <Text color={color} dimColor={isDim ? dim() : false}>
               {clip(line, 200)}
             </Text>
           </Box>
@@ -280,7 +344,7 @@ function FileEdit(props: {
       })}
       {item.preview.split("\n").length > cfg.maxPreviewLines && (
         <Box marginLeft={4}>
-          <Text color="gray" dimColor>
+          <Text color={col("gray")} dimColor={dim()}>
             ... (preview truncated)
           </Text>
         </Box>
@@ -299,17 +363,17 @@ function TerminalBlock(props: {
 
   return (
     <Box paddingX={1} flexDirection="column">
-      <Text color="gray" dimColor>
+      <Text color={col("cyan")} dimColor={dim()}>
         {"   terminal"}
       </Text>
       {tail.map((line, i) => (
         <Box key={i} marginLeft={4}>
-          <Text color="white">{clip(line, 300)}</Text>
+          <Text color={col("whiteBright")}>{clip(line, 300)}</Text>
         </Box>
       ))}
       {allLines.length > cfg.maxTerminalLines && (
         <Box marginLeft={4}>
-          <Text color="gray" dimColor>
+          <Text color={col("gray")} dimColor={dim()}>
             {`... ${allLines.length - cfg.maxTerminalLines} earlier line(s) hidden`}
           </Text>
         </Box>
