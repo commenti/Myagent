@@ -553,9 +553,8 @@ export function Renderer(
           Date.now();
 
         pushItem({
-          type: "tool-call",
-          name: "user",
-          args: text.slice(0, 160),
+          type: "user-message",
+          text,
         });
 
         // Best-effort: log the user message into the session.
@@ -577,7 +576,23 @@ export function Renderer(
           if (onUserMessage) {
             await onUserMessage(
               text,
-              pushItem
+              (item) => {
+                // The turn runner currently emits completed assistant text
+                // as a note. Promote that specific note to a committed
+                // assistant-message so ActivityStream renders it clearly.
+                if (
+                  item.type === "note" &&
+                  item.text.startsWith("assistant: ")
+                ) {
+                  pushItem({
+                    type: "assistant-message",
+                    text: item.text.slice("assistant: ".length),
+                  });
+                  return;
+                }
+
+                pushItem(item);
+              }
             );
           } else {
             pushItem({

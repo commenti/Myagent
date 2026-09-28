@@ -135,7 +135,7 @@ export function ActivityStream(props: ActivityStreamProps): React.ReactElement {
 
   // Committed items → <Static>. Each is printed once and stays in the
   // terminal's scrollback.
-  const committed = useMemo(() => items as readonly ActivityItem[], [items]);
+  const committed = useMemo(() => [...items], [items]);
 
   // Live streaming text — last few lines only.
   const liveLines = useMemo(
