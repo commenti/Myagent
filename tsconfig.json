@@ -2,18 +2,14 @@
   "compilerOptions": {
     "target": "ES2022",
     "lib": ["ES2022"],
-    "module": "CommonJS",
-    "moduleResolution": "Node",
+    "module": "preserve",
+    "moduleResolution": "bundler",
 
     "jsx": "react-jsx",
     "jsxImportSource": "react",
 
-    "outDir": "./dist",
     "rootDir": "./src",
-    "declaration": true,
-    "declarationMap": true,
-    "sourceMap": true,
-    "removeComments": false,
+    "noEmit": true,
 
     "strict": true,
     "noUnusedLocals": true,
