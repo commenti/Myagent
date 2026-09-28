@@ -61,7 +61,8 @@ const FIELD_HINTS: Record<FieldName, string> = {
   model: "e.g. gpt-oss-120b",
 };
 
-const FIELD_WIDTH = 48;
+
+
 
 
 // ------------------------------------------------------------------
