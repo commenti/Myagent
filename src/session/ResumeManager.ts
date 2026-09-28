@@ -69,10 +69,9 @@ export class ResumeManagerError extends Error {
 // ------------------------------------------------------------------
 
 export class ResumeManager {
-  private readonly homeConfig: HomeConfig;
+  
   private readonly projectConfig: ProjectConfig;
 
-  constructor(opts: { homeConfig: HomeConfig; projectConfig: ProjectConfig }) {
     this.homeConfig = opts.homeConfig;
     this.projectConfig = opts.projectConfig;
   }

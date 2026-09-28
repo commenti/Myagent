@@ -27,7 +27,6 @@ import { readFile, type FileReadResult } from "../tools/FileRead";
 import { PathGuard, PathGuardError } from "../policy/PathGuard";
 import type { RepoMap } from "./RepoMap";
 
-
 // ------------------------------------------------------------------
 // Config
 // ------------------------------------------------------------------
@@ -36,7 +35,6 @@ const DEFAULT_MAX_FILES = 8;
 const MIN_FILES = 1;
 const MAX_FILES_HARD = 16;
 const DEFAULT_MAX_BYTES_PER_FILE = 128 * 1024; // 128 KB in context
-
 
 // ------------------------------------------------------------------
 // Public types
@@ -81,16 +79,15 @@ export interface WorkingSetSnapshot {
   readonly totalLines: number;
 }
 
-
 export class WorkingSetError extends Error {
   public readonly code: "blocked" | "not_found" | "io_error";
+
   constructor(code: WorkingSetError["code"], message: string) {
     super(message);
     this.name = "WorkingSetError";
     this.code = code;
   }
 }
-
 
 // ------------------------------------------------------------------
 // WorkingSet
@@ -100,16 +97,23 @@ export class WorkingSet {
   private readonly guard: PathGuard;
   private readonly maxFiles: number;
   private readonly maxBytesPerFile: number;
+
   /** Map preserves insertion order; we re-insert on touch for LRU. */
   private readonly entries = new Map<string, WorkingSetEntry>();
 
   constructor(opts: WorkingSetOptions) {
     this.guard = new PathGuard(opts.cwd);
-    const cap = opts.maxFiles ?? DEFAULT_MAX_FILES;
-    this.maxFiles = Math.max(MIN_FILES, Math.min(MAX_FILES_HARD, cap));
-    this.maxBytesPerFile = opts.maxBytesPerFile ?? DEFAULT_MAX_BYTES_PER_FILE;
-  }
 
+    const cap = opts.maxFiles ?? DEFAULT_MAX_FILES;
+
+    this.maxFiles = Math.max(
+      MIN_FILES,
+      Math.min(MAX_FILES_HARD, cap)
+    );
+
+    this.maxBytesPerFile =
+      opts.maxBytesPerFile ?? DEFAULT_MAX_BYTES_PER_FILE;
+  }
 
   // ----------------------------------------------------------------
   // Reads
@@ -119,16 +123,20 @@ export class WorkingSet {
    * Add (or refresh) a file. Reads it fresh from disk.
    * If already present, updates content + mtime and bumps LRU.
    */
-  public async add(filePath: string, reason = "added"): Promise<AddResult> {
+  public async add(
+    filePath: string,
+    reason = "added"
+  ): Promise<AddResult> {
     const absPath = this.resolve(filePath);
     const relPath = this.rel(absPath);
 
-    const fresh = await this.readFresh(relPath, absPath);
+    const fresh = await this.readFresh(relPath);
 
     const existing = this.entries.get(absPath);
     const added = existing === undefined;
 
     const now = new Date().toISOString();
+
     const entry: WorkingSetEntry = {
       relPath,
       absPath,
@@ -138,7 +146,10 @@ export class WorkingSet {
       mtimeIso: fresh.mtimeIso,
       addedAt: existing?.addedAt ?? now,
       lastUsedAt: now,
-      reason: existing && existing.reason.length > 0 ? existing.reason : reason,
+      reason:
+        existing && existing.reason.length > 0
+          ? existing.reason
+          : reason,
       truncated: fresh.truncated,
     };
 
@@ -147,6 +158,7 @@ export class WorkingSet {
     this.entries.set(absPath, entry);
 
     this.enforceCap();
+
     return { entry, added };
   }
 
@@ -154,17 +166,26 @@ export class WorkingSet {
   public async addMany(
     filePaths: readonly string[],
     reason = "added"
-  ): Promise<{ added: WorkingSetEntry[]; failed: { path: string; message: string }[] }> {
+  ): Promise<{
+    added: WorkingSetEntry[];
+    failed: { path: string; message: string }[];
+  }> {
     const added: WorkingSetEntry[] = [];
     const failed: { path: string; message: string }[] = [];
+
     for (const p of filePaths) {
       try {
         const { entry } = await this.add(p, reason);
         added.push(entry);
       } catch (err) {
-        failed.push({ path: p, message: err instanceof Error ? err.message : String(err) });
+        failed.push({
+          path: p,
+          message:
+            err instanceof Error ? err.message : String(err),
+        });
       }
     }
+
     return { added, failed };
   }
 
@@ -179,7 +200,6 @@ export class WorkingSet {
     this.entries.clear();
   }
 
-
   // ----------------------------------------------------------------
   // Staleness
   // ----------------------------------------------------------------
@@ -191,8 +211,10 @@ export class WorkingSet {
    */
   public async refreshStale(): Promise<readonly string[]> {
     const refreshed: string[] = [];
+
     for (const [absPath, entry] of [...this.entries]) {
       let onDiskMtime: string;
+
       try {
         const st = await fs.stat(absPath);
         onDiskMtime = new Date(st.mtimeMs).toISOString();
@@ -201,10 +223,13 @@ export class WorkingSet {
         this.entries.delete(absPath);
         continue;
       }
+
       if (onDiskMtime !== entry.mtimeIso) {
         try {
-          const fresh = await this.readFresh(entry.relPath, absPath);
+          const fresh = await this.readFresh(entry.relPath);
+
           const now = new Date().toISOString();
+
           const updated: WorkingSetEntry = {
             ...entry,
             content: fresh.content,
@@ -214,6 +239,7 @@ export class WorkingSet {
             lastUsedAt: now,
             truncated: fresh.truncated,
           };
+
           this.entries.delete(absPath);
           this.entries.set(absPath, updated);
           refreshed.push(entry.relPath);
@@ -223,9 +249,9 @@ export class WorkingSet {
         }
       }
     }
+
     return refreshed;
   }
-
 
   // ----------------------------------------------------------------
   // Selection from RepoMap
@@ -245,16 +271,29 @@ export class WorkingSet {
 
     for (const f of repoMap.files) {
       let score = 0;
+
       for (const s of f.symbols) {
-        if (wanted.has(s.name)) score += s.exported ? 2 : 1;
+        if (wanted.has(s.name)) {
+          score += s.exported ? 2 : 1;
+        }
       }
-      if (score > 0) scored.push({ relPath: f.relPath, score });
+
+      if (score > 0) {
+        scored.push({
+          relPath: f.relPath,
+          score,
+        });
+      }
     }
 
     scored.sort((a, b) => b.score - a.score);
-    const picks = scored.slice(0, this.maxFiles).map((s) => s.relPath);
+
+    const picks = scored
+      .slice(0, this.maxFiles)
+      .map((s) => s.relPath);
 
     const result: WorkingSetEntry[] = [];
+
     for (const p of picks) {
       try {
         const { entry } = await this.add(p, reason);
@@ -263,9 +302,9 @@ export class WorkingSet {
         /* skip files that fail to read */
       }
     }
+
     return result;
   }
-
 
   // ----------------------------------------------------------------
   // Snapshot / format
@@ -274,13 +313,20 @@ export class WorkingSet {
   /** Current contents as a plain snapshot. */
   public snapshot(): WorkingSetSnapshot {
     const entries = [...this.entries.values()];
+
     let totalBytes = 0;
     let totalLines = 0;
+
     for (const e of entries) {
       totalBytes += e.byteSize;
       totalLines += e.totalLines;
     }
-    return { entries, totalBytes, totalLines };
+
+    return {
+      entries,
+      totalBytes,
+      totalLines,
+    };
   }
 
   /** Number of files currently in the set. */
@@ -318,31 +364,51 @@ export class WorkingSet {
    */
   public format(maxBytesTotal = 256 * 1024): string {
     const entries = [...this.entries.values()];
-    if (entries.length === 0) return "== WORKING SET (empty) ==";
 
-    const parts: string[] = [`== WORKING SET (${entries.length} files) ==`];
+    if (entries.length === 0) {
+      return "== WORKING SET (empty) ==";
+    }
+
+    const parts: string[] = [
+      `== WORKING SET (${entries.length} files) ==`,
+    ];
+
     let budget = maxBytesTotal;
 
     for (const e of entries) {
       if (budget <= 0) {
-        parts.push(`--- ${e.relPath} (skipped, context budget full) ---`);
+        parts.push(
+          `--- ${e.relPath} (skipped, context budget full) ---`
+        );
         continue;
       }
-      const header = `--- ${e.relPath} (${e.totalLines} lines) ---`;
+
+      const header =
+        `--- ${e.relPath} (${e.totalLines} lines) ---`;
+
       const body = e.content;
       const bodyBytes = Buffer.byteLength(body, "utf8");
+
       if (bodyBytes <= budget) {
         parts.push(header, body);
         budget -= bodyBytes;
       } else {
-        const slice = Buffer.from(body, "utf8").subarray(0, budget).toString("utf8");
-        parts.push(header, slice, "… (truncated to fit context budget)");
+        const slice = Buffer.from(body, "utf8")
+          .subarray(0, budget)
+          .toString("utf8");
+
+        parts.push(
+          header,
+          slice,
+          "… (truncated to fit context budget)"
+        );
+
         budget = 0;
       }
     }
+
     return parts.join("\n");
   }
-
 
   // ----------------------------------------------------------------
   // Internals
@@ -355,17 +421,20 @@ export class WorkingSet {
       if (err instanceof PathGuardError) {
         throw new WorkingSetError("blocked", err.message);
       }
+
       throw err;
     }
   }
 
   private rel(absPath: string): string {
-    return path.relative(this.guard.workingDir, absPath) || path.basename(absPath);
+    return (
+      path.relative(this.guard.workingDir, absPath) ||
+      path.basename(absPath)
+    );
   }
 
   private async readFresh(
-    relPath: string,
-    absPath: string
+    relPath: string
   ): Promise<FileReadResult> {
     try {
       return await readFile({
@@ -375,9 +444,17 @@ export class WorkingSet {
       });
     } catch (err) {
       const code = (err as { code?: string }).code;
-      const msg = err instanceof Error ? err.message : String(err);
-      if (code === "blocked") throw new WorkingSetError("blocked", msg);
-      if (code === "not_found") throw new WorkingSetError("not_found", msg);
+      const msg =
+        err instanceof Error ? err.message : String(err);
+
+      if (code === "blocked") {
+        throw new WorkingSetError("blocked", msg);
+      }
+
+      if (code === "not_found") {
+        throw new WorkingSetError("not_found", msg);
+      }
+
       throw new WorkingSetError("io_error", msg);
     }
   }
@@ -385,8 +462,11 @@ export class WorkingSet {
   private enforceCap(): void {
     while (this.entries.size > this.maxFiles) {
       // Map iteration order = insertion order; the first key is the oldest.
-      const oldest = this.entries.keys().next().value as string | undefined;
+      const oldest = this.entries.keys().next()
+        .value as string | undefined;
+
       if (!oldest) break;
+
       this.entries.delete(oldest);
     }
   }

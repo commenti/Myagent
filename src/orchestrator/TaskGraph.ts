@@ -19,8 +19,7 @@
  */
 
 import type { MemoryStore, ProgressEntry } from "../memory/MemoryStore";
-import type { Plan, PlanStep } from "./Planner";
-
+import type { Plan } from "./Planner";
 
 // ------------------------------------------------------------------
 // Public types
@@ -70,6 +69,7 @@ export interface TaskGraphOptions {
 
 export class TaskGraphError extends Error {
   public readonly code: "unknown_task" | "cycle" | "io_error";
+
   constructor(code: TaskGraphError["code"], message: string) {
     super(message);
     this.name = "TaskGraphError";
@@ -77,13 +77,11 @@ export class TaskGraphError extends Error {
   }
 }
 
-
 // ------------------------------------------------------------------
 // TaskGraph
 // ------------------------------------------------------------------
 
 export class TaskGraph {
-  private readonly cwd: string;
   private readonly memoryStore?: MemoryStore;
   private readonly defaultVerify?: string;
 
@@ -91,11 +89,9 @@ export class TaskGraph {
   private readonly tasks = new Map<string, Task>();
 
   constructor(opts: TaskGraphOptions) {
-    this.cwd = opts.cwd;
     if (opts.memoryStore) this.memoryStore = opts.memoryStore;
     if (opts.defaultVerify) this.defaultVerify = opts.defaultVerify;
   }
-
 
   // ----------------------------------------------------------------
   // Building from a plan
@@ -118,17 +114,23 @@ export class TaskGraph {
         counter++;
         const id = `t${counter}`;
         const dependsOn: string[] = [];
+
         if (prevInPhase) dependsOn.push(prevInPhase);
 
         const task: Task = {
           id,
           title: step.title,
           files: step.files,
-          ...(step.verify ? { verify: step.verify } : this.defaultVerify ? { verify: this.defaultVerify } : {}),
+          ...(step.verify
+            ? { verify: step.verify }
+            : this.defaultVerify
+              ? { verify: this.defaultVerify }
+              : {}),
           dependsOn,
           phase: section.heading,
           status: "pending",
         };
+
         this.tasks.set(id, task);
         prevInPhase = id;
       }
@@ -145,6 +147,7 @@ export class TaskGraph {
    */
   public mergeFromPlan(plan: Plan): void {
     const existingByTitle = new Map<string, Task>();
+
     for (const t of this.tasks.values()) {
       existingByTitle.set(normalize(t.title), t);
     }
@@ -157,33 +160,41 @@ export class TaskGraph {
 
       for (const step of section.steps) {
         const existing = existingByTitle.get(normalize(step.title));
+
         if (existing) {
           prevInPhase = existing.id;
           continue;
         }
+
         counter++;
         const id = `t${counter}`;
         const dependsOn: string[] = [];
+
         if (prevInPhase) dependsOn.push(prevInPhase);
 
         const task: Task = {
           id,
           title: step.title,
           files: step.files,
-          ...(step.verify ? { verify: step.verify } : this.defaultVerify ? { verify: this.defaultVerify } : {}),
+          ...(step.verify
+            ? { verify: step.verify }
+            : this.defaultVerify
+              ? { verify: this.defaultVerify }
+              : {}),
           dependsOn,
           phase: section.heading,
           status: "pending",
         };
+
         this.tasks.set(id, task);
         prevInPhase = id;
       }
 
       previousPhaseTail = prevInPhase;
     }
+
     this.assertNoCycles();
   }
-
 
   // ----------------------------------------------------------------
   // Queries
@@ -202,10 +213,12 @@ export class TaskGraph {
   /** Tasks with all dependencies done and status pending. */
   public ready(): readonly Task[] {
     const out: Task[] = [];
+
     for (const t of this.tasks.values()) {
       if (t.status !== "pending") continue;
       if (this.depsSatisfied(t)) out.push(t);
     }
+
     return out;
   }
 
@@ -220,49 +233,87 @@ export class TaskGraph {
     for (const t of this.tasks.values()) {
       if (t.status !== "done") return false;
     }
+
     return this.tasks.size > 0;
   }
 
   /** True if any task is failed or blocked. */
   public hasFailures(): boolean {
     for (const t of this.tasks.values()) {
-      if (t.status === "failed" || t.status === "blocked") return true;
+      if (t.status === "failed" || t.status === "blocked") {
+        return true;
+      }
     }
+
     return false;
   }
 
   /** Aggregate counts. */
   public snapshot(): TaskGraphSnapshot {
-    let done = 0, failed = 0, blocked = 0, pending = 0, active = 0;
+    let done = 0;
+    let failed = 0;
+    let blocked = 0;
+    let pending = 0;
+    let active = 0;
+
     for (const t of this.tasks.values()) {
       switch (t.status) {
-        case "done": done++; break;
-        case "failed": failed++; break;
-        case "blocked": blocked++; break;
-        case "active": active++; break;
-        case "pending": pending++; break;
+        case "done":
+          done++;
+          break;
+        case "failed":
+          failed++;
+          break;
+        case "blocked":
+          blocked++;
+          break;
+        case "active":
+          active++;
+          break;
+        case "pending":
+          pending++;
+          break;
       }
     }
+
     return {
       tasks: [...this.tasks.values()],
       total: this.tasks.size,
-      done, failed, blocked, pending, active,
+      done,
+      failed,
+      blocked,
+      pending,
+      active,
       isComplete: this.isComplete(),
       hasFailures: this.hasFailures(),
     };
   }
 
-
   // ----------------------------------------------------------------
   // Mutations
   // ----------------------------------------------------------------
 
-  public setStatus(id: string, status: TaskStatus, note?: string): void {
+  public setStatus(
+    id: string,
+    status: TaskStatus,
+    note?: string
+  ): void {
     const t = this.tasks.get(id);
-    if (!t) throw new TaskGraphError("unknown_task", `unknown task id: ${id}`);
+
+    if (!t) {
+      throw new TaskGraphError(
+        "unknown_task",
+        `unknown task id: ${id}`
+      );
+    }
+
     t.status = status;
-    if (note !== undefined) t.note = note;
-    else if (status !== "failed" && status !== "blocked") delete t.note;
+
+    if (note !== undefined) {
+      t.note = note;
+    } else if (status !== "failed" && status !== "blocked") {
+      delete t.note;
+    }
   }
 
   public markActive(id: string): void {
@@ -287,12 +338,22 @@ export class TaskGraph {
    */
   public reset(id: string, cascade = true): void {
     const t = this.tasks.get(id);
-    if (!t) throw new TaskGraphError("unknown_task", `unknown task id: ${id}`);
+
+    if (!t) {
+      throw new TaskGraphError(
+        "unknown_task",
+        `unknown task id: ${id}`
+      );
+    }
+
     t.status = "pending";
     delete t.note;
+
     if (cascade) {
       for (const other of this.tasks.values()) {
-        if (other.dependsOn.includes(id)) this.reset(other.id, true);
+        if (other.dependsOn.includes(id)) {
+          this.reset(other.id, true);
+        }
       }
     }
   }
@@ -307,15 +368,19 @@ export class TaskGraph {
   }): Task {
     let counter = this.tasks.size;
     let id: string;
+
     do {
       counter++;
       id = `t${counter}`;
     } while (this.tasks.has(id));
 
     const last = [...this.tasks.values()].pop();
+
     const deps = input.dependsOn
       ? [...input.dependsOn]
-      : last ? [last.id] : [];
+      : last
+        ? [last.id]
+        : [];
 
     const task: Task = {
       id,
@@ -326,11 +391,12 @@ export class TaskGraph {
       phase: input.phase ?? "Ad-hoc",
       status: "pending",
     };
+
     this.tasks.set(id, task);
     this.assertNoCycles();
+
     return task;
   }
-
 
   // ----------------------------------------------------------------
   // Persistence
@@ -344,13 +410,19 @@ export class TaskGraph {
   public async persist(): Promise<void> {
     if (!this.memoryStore) return;
 
-    const sections: { heading: string; items: string[] }[] = [];
+    const sections: {
+      heading: string;
+      items: string[];
+    }[] = [];
+
     const grouped = new Map<string, string[]>();
+
     for (const t of this.tasks.values()) {
       const list = grouped.get(t.phase) ?? [];
       list.push(`${statusMark(t.status)} ${t.id} — ${t.title}`);
       grouped.set(t.phase, list);
     }
+
     for (const [heading, items] of grouped) {
       sections.push({ heading, items });
     }
@@ -358,14 +430,22 @@ export class TaskGraph {
     try {
       await this.memoryStore.replacePlan(sections);
     } catch (err) {
-      throw new TaskGraphError("io_error", err instanceof Error ? err.message : String(err));
+      throw new TaskGraphError(
+        "io_error",
+        err instanceof Error ? err.message : String(err)
+      );
     }
 
     const progress: ProgressEntry[] = this.all().map((t) => {
       const status: ProgressEntry["status"] =
-        t.status === "done" ? "done" :
-        t.status === "failed" ? "blocked" :
-        t.status === "blocked" ? "blocked" : "pending";
+        t.status === "done"
+          ? "done"
+          : t.status === "failed"
+            ? "blocked"
+            : t.status === "blocked"
+              ? "blocked"
+              : "pending";
+
       return {
         task: `${t.id} — ${t.title}`,
         status,
@@ -376,10 +456,12 @@ export class TaskGraph {
     try {
       await this.memoryStore.replaceProgress(progress);
     } catch (err) {
-      throw new TaskGraphError("io_error", err instanceof Error ? err.message : String(err));
+      throw new TaskGraphError(
+        "io_error",
+        err instanceof Error ? err.message : String(err)
+      );
     }
   }
-
 
   // ----------------------------------------------------------------
   // Internals
@@ -388,35 +470,58 @@ export class TaskGraph {
   private depsSatisfied(t: Task): boolean {
     for (const depId of t.dependsOn) {
       const dep = this.tasks.get(depId);
+
       if (!dep) continue; // dangling dep — treat as satisfied
+
       if (dep.status !== "done") return false;
     }
+
     return true;
   }
 
   private assertNoCycles(): void {
-    const WHITE = 0, GRAY = 1, BLACK = 2;
+    const WHITE = 0;
+    const GRAY = 1;
+    const BLACK = 2;
+
     const color = new Map<string, number>();
-    for (const id of this.tasks.keys()) color.set(id, WHITE);
+
+    for (const id of this.tasks.keys()) {
+      color.set(id, WHITE);
+    }
 
     const visit = (id: string): void => {
       const c = color.get(id) ?? WHITE;
-      if (c === GRAY) throw new TaskGraphError("cycle", `cycle detected at task ${id}`);
+
+      if (c === GRAY) {
+        throw new TaskGraphError(
+          "cycle",
+          `cycle detected at task ${id}`
+        );
+      }
+
       if (c === BLACK) return;
+
       color.set(id, GRAY);
+
       const t = this.tasks.get(id);
+
       if (t) {
         for (const dep of t.dependsOn) {
-          if (this.tasks.has(dep)) visit(dep);
+          if (this.tasks.has(dep)) {
+            visit(dep);
+          }
         }
       }
+
       color.set(id, BLACK);
     };
 
-    for (const id of this.tasks.keys()) visit(id);
+    for (const id of this.tasks.keys()) {
+      visit(id);
+    }
   }
 }
-
 
 // ------------------------------------------------------------------
 // Helpers
@@ -424,18 +529,22 @@ export class TaskGraph {
 
 function statusMark(s: TaskStatus): string {
   switch (s) {
-    case "done": return "[x]";
-    case "failed": return "[!]";
-    case "blocked": return "[!]";
-    case "active": return "[~]";
-    case "pending": return "[ ]";
+    case "done":
+      return "[x]";
+    case "failed":
+      return "[!]";
+    case "blocked":
+      return "[!]";
+    case "active":
+      return "[~]";
+    case "pending":
+      return "[ ]";
   }
 }
 
 function normalize(s: string): string {
   return s.replace(/\s+/g, " ").trim().toLowerCase();
 }
-
 
 // ------------------------------------------------------------------
 // Convenience: convert task graph back to memory sections (already done in
@@ -444,12 +553,22 @@ function normalize(s: string): string {
 
 export function tasksToMemorySections(
   tasks: readonly Task[]
-): readonly { heading: string; items: readonly string[] }[] {
+): readonly {
+  heading: string;
+  items: readonly string[];
+}[] {
   const grouped = new Map<string, string[]>();
+
   for (const t of tasks) {
     const list = grouped.get(t.phase) ?? [];
     list.push(`${statusMark(t.status)} ${t.id} — ${t.title}`);
     grouped.set(t.phase, list);
   }
-  return [...grouped.entries()].map(([heading, items]) => ({ heading, items }));
+
+  return [...grouped.entries()].map(
+    ([heading, items]) => ({
+      heading,
+      items,
+    })
+  );
 }

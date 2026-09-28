@@ -32,7 +32,7 @@ import { fingerprint, type ErrorCategory } from "./ErrorFingerprint";
 const DEFAULT_RETRY_LIMIT = 1;       // retries allowed without changing approach
 const DEFAULT_CHANGE_LIMIT = 2;      // after this many, escalate further
 const DEFAULT_ROLLBACK_LIMIT = 3;    // at this many, rollback + fresh context
-const DEFAULT_ASK_USER_LIMIT = 4;    // at this many, stop and ask the user
+    // at this many, stop and ask the user
 
 
 // ------------------------------------------------------------------
@@ -88,14 +88,14 @@ export class EscalationLadder {
   private readonly retryLimit: number;
   private readonly changeLimit: number;
   private readonly rollbackLimit: number;
-  private readonly askUserLimit: number;
+  
 
   constructor(opts: EscalationOptions) {
     this.ledger = opts.ledger;
     this.retryLimit = opts.retryLimit ?? DEFAULT_RETRY_LIMIT;
     this.changeLimit = opts.changeLimit ?? DEFAULT_CHANGE_LIMIT;
     this.rollbackLimit = opts.rollbackLimit ?? DEFAULT_ROLLBACK_LIMIT;
-    this.askUserLimit = opts.askUserLimit ?? DEFAULT_ASK_USER_LIMIT;
+    
   }
 
 

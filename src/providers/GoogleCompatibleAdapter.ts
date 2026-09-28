@@ -29,7 +29,6 @@ import {
 import { classifyProviderError, normalizeError } from "./ErrorClassifier";
 import { getCapabilities } from "./CapabilityRegistry";
 
-
 // ------------------------------------------------------------------
 // Constants
 // ------------------------------------------------------------------
@@ -38,7 +37,6 @@ const API_VERSION = "v1beta";
 const DEFAULT_TIMEOUT_MS = 120_000;
 const HANDSHAKE_TIMEOUT_MS = 20_000;
 const DEFAULT_MAX_OUTPUT = 4_096;
-
 
 // ------------------------------------------------------------------
 // Wire types (minimal subset we read)
@@ -77,7 +75,6 @@ interface GeminiStreamChunk {
   };
 }
 
-
 // ------------------------------------------------------------------
 // Adapter
 // ------------------------------------------------------------------
@@ -93,7 +90,6 @@ export class GoogleCompatibleAdapter implements ProviderAdapter {
     this.capabilities = getCapabilities("");
   }
 
-
   // ----------------------------------------------------------------
   // URL
   // ----------------------------------------------------------------
@@ -105,12 +101,23 @@ export class GoogleCompatibleAdapter implements ProviderAdapter {
   ): string {
     const base = baseUrl.replace(/\/+$/, "");
     // If the user pasted a full base (…/v1beta), use it; else append /v1beta.
-    const root = /\/v\d+[a-z]*$/i.test(base) ? base : base + "/" + API_VERSION;
-    const method = stream ? "streamGenerateContent" : "generateContent";
+    const root = /\/v\d+[a-z]*$/i.test(base)
+      ? base
+      : base + "/" + API_VERSION;
+    const method = stream
+      ? "streamGenerateContent"
+      : "generateContent";
     const tail = stream ? "?alt=sse" : "";
-    return root + "/models/" + encodeURIComponent(model) + ":" + method + tail;
-  }
 
+    return (
+      root +
+      "/models/" +
+      encodeURIComponent(model) +
+      ":" +
+      method +
+      tail
+    );
+  }
 
   // ----------------------------------------------------------------
   // Message mapping (neutral → Gemini)
@@ -122,17 +129,23 @@ export class GoogleCompatibleAdapter implements ProviderAdapter {
   } {
     const systems: string[] = [];
     const rest: ChatMessage[] = [];
+
     for (const m of messages) {
       if (m.role === "system") {
         const text = m.parts
           .map((p) => (p.kind === "text" ? p.text : ""))
           .join("\n");
+
         if (text.length > 0) systems.push(text);
       } else {
         rest.push(m);
       }
     }
-    return { system: systems.join("\n\n"), rest };
+
+    return {
+      system: systems.join("\n\n"),
+      rest,
+    };
   }
 
   private toParts(msg: ChatMessage): GeminiPart[] {
@@ -143,40 +156,61 @@ export class GoogleCompatibleAdapter implements ProviderAdapter {
       const text = msg.parts
         .map((p) => (p.kind === "text" ? p.text : ""))
         .join("");
+
       parts.push({
         functionResponse: {
           name: msg.toolCallId ?? "",
           response: { content: text },
         },
       });
+
       return parts;
     }
 
     // Text + image parts.
     for (const part of msg.parts) {
       if (part.kind === "text") {
-        if (part.text.length > 0) parts.push({ text: part.text });
+        if (part.text.length > 0) {
+          parts.push({ text: part.text });
+        }
       } else if (part.kind === "image") {
         parts.push({
-          inlineData: { mimeType: part.mimeType, data: part.base64 },
+          inlineData: {
+            mimeType: part.mimeType,
+            data: part.base64,
+          },
         });
       }
     }
 
     // Assistant tool calls.
-    if (msg.role === "assistant" && msg.toolCalls && msg.toolCalls.length > 0) {
+    if (
+      msg.role === "assistant" &&
+      msg.toolCalls &&
+      msg.toolCalls.length > 0
+    ) {
       for (const tc of msg.toolCalls) {
         let parsedArgs: unknown = {};
+
         try {
           parsedArgs = JSON.parse(tc.argumentsJson || "{}");
         } catch {
           parsedArgs = {};
         }
-        parts.push({ functionCall: { name: tc.name, args: parsedArgs } });
+
+        parts.push({
+          functionCall: {
+            name: tc.name,
+            args: parsedArgs,
+          },
+        });
       }
     }
 
-    if (parts.length === 0) parts.push({ text: "" });
+    if (parts.length === 0) {
+      parts.push({ text: "" });
+    }
+
     return parts;
   }
 
@@ -184,28 +218,38 @@ export class GoogleCompatibleAdapter implements ProviderAdapter {
    * Gemini roles are "user" | "model". Consecutive same-role messages are
    * coalesced so the API doesn't reject the payload.
    */
-  private toContents(messages: readonly ChatMessage[]): GeminiContent[] {
+  private toContents(
+    messages: readonly ChatMessage[]
+  ): GeminiContent[] {
     const out: GeminiContent[] = [];
 
     for (const m of messages) {
-      const role: "user" | "model" = m.role === "assistant" ? "model" : "user";
-      const parts = this.toParts(m);
+      const role: "user" | "model" =
+        m.role === "assistant" ? "model" : "user";
 
+      const parts = this.toParts(m);
       const last = out[out.length - 1];
+
       if (last && last.role === role) {
         last.parts.push(...parts);
       } else {
-        out.push({ role, parts });
+        out.push({
+          role,
+          parts,
+        });
       }
     }
 
     // Gemini requires the first content to be role "user".
     if (out.length > 0 && out[0].role === "model") {
-      out.unshift({ role: "user", parts: [{ text: "" }] });
+      out.unshift({
+        role: "user",
+        parts: [{ text: "" }],
+      });
     }
+
     return out;
   }
-
 
   // ----------------------------------------------------------------
   // Tools
@@ -221,23 +265,37 @@ export class GoogleCompatibleAdapter implements ProviderAdapter {
     };
   }
 
-  private toGeminiTools(tools: readonly ToolSchema[]): unknown[] {
-    return [{ functionDeclarations: tools.map((t) => this.toGeminiTool(t)) }];
+  private toGeminiTools(
+    tools: readonly ToolSchema[]
+  ): unknown[] {
+    return [
+      {
+        functionDeclarations: tools.map((t) =>
+          this.toGeminiTool(t)
+        ),
+      },
+    ];
   }
-
 
   // ----------------------------------------------------------------
   // Request builder
   // ----------------------------------------------------------------
 
-  private buildBody(request: ChatRequest, _stream: boolean): GeminiRequestBody {
+  private buildBody(
+    request: ChatRequest,
+    _stream: boolean
+  ): GeminiRequestBody {
     const { system, rest } = this.splitSystem(request.messages);
     const contents = this.toContents(rest);
 
-    const body: GeminiRequestBody = { contents };
+    const body: GeminiRequestBody = {
+      contents,
+    };
 
     if (system.length > 0) {
-      body.systemInstruction = { parts: [{ text: system }] };
+      body.systemInstruction = {
+        parts: [{ text: system }],
+      };
     }
 
     if (request.tools && request.tools.length > 0) {
@@ -245,57 +303,88 @@ export class GoogleCompatibleAdapter implements ProviderAdapter {
     }
 
     const gen: GeminiRequestBody["generationConfig"] = {};
+
     if (typeof request.maxOutputTokens === "number") {
       gen.maxOutputTokens = request.maxOutputTokens;
     }
+
     if (typeof request.temperature === "number") {
       gen.temperature = request.temperature;
     }
-    if (Object.keys(gen).length > 0) body.generationConfig = gen;
+
+    if (Object.keys(gen).length > 0) {
+      body.generationConfig = gen;
+    }
 
     return body;
   }
-
 
   // ----------------------------------------------------------------
   // Headers
   // ----------------------------------------------------------------
 
-  private headers(apiKey: string, stream: boolean): Record<string, string> {
+  private headers(
+    apiKey: string,
+    stream: boolean
+  ): Record<string, string> {
     const h: Record<string, string> = {
       "Content-Type": "application/json",
       "x-goog-api-key": apiKey,
     };
-    if (stream) h["Accept"] = "text/event-stream";
+
+    if (stream) {
+      h["Accept"] = "text/event-stream";
+    }
+
     return h;
   }
-
 
   // ----------------------------------------------------------------
   // Handshake
   // ----------------------------------------------------------------
 
-  public async handshake(config: AdapterConfig): Promise<void> {
-    const url = this.endpoint(config.baseUrl, config.model, false);
+  public async handshake(
+    config: AdapterConfig
+  ): Promise<void> {
+    const url = this.endpoint(
+      config.baseUrl,
+      config.model,
+      false
+    );
 
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), HANDSHAKE_TIMEOUT_MS);
+    const timer = setTimeout(
+      () => controller.abort(),
+      HANDSHAKE_TIMEOUT_MS
+    );
 
     try {
       const res = await this.fetchImpl(url, {
         method: "POST",
         headers: this.headers(config.apiKey, false),
         body: JSON.stringify({
-          contents: [{ role: "user", parts: [{ text: "hi" }] }],
-          generationConfig: { maxOutputTokens: 1 },
+          contents: [
+            {
+              role: "user",
+              parts: [{ text: "hi" }],
+            },
+          ],
+          generationConfig: {
+            maxOutputTokens: 1,
+          },
         }),
         signal: controller.signal,
       });
 
       if (!res.ok) {
         const errBody = await safeJson(res);
-        throw classifyProviderError({ status: res.status, body: errBody });
+
+        throw classifyProviderError({
+          status: res.status,
+          body: errBody,
+        });
       }
+
       // Drain the body (some deployments warn if the body isn't consumed).
       await res.text();
     } catch (err) {
@@ -305,7 +394,6 @@ export class GoogleCompatibleAdapter implements ProviderAdapter {
     }
   }
 
-
   // ----------------------------------------------------------------
   // Streaming
   // ----------------------------------------------------------------
@@ -314,18 +402,34 @@ export class GoogleCompatibleAdapter implements ProviderAdapter {
     config: AdapterConfig,
     request: ChatRequest
   ): AsyncIterable<AdapterEvent> {
-    const url = this.endpoint(config.baseUrl, request.model, true);
+    const url = this.endpoint(
+      config.baseUrl,
+      request.model,
+      true
+    );
+
     const body = this.buildBody(request, true);
 
     const controller = new AbortController();
     const onAbort = () => controller.abort();
+
     if (request.signal) {
-      if (request.signal.aborted) controller.abort();
-      else request.signal.addEventListener("abort", onAbort, { once: true });
+      if (request.signal.aborted) {
+        controller.abort();
+      } else {
+        request.signal.addEventListener("abort", onAbort, {
+          once: true,
+        });
+      }
     }
-    const timer = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+
+    const timer = setTimeout(
+      () => controller.abort(),
+      DEFAULT_TIMEOUT_MS
+    );
 
     let res: Response;
+
     try {
       res = await this.fetchImpl(url, {
         method: "POST",
@@ -335,21 +439,40 @@ export class GoogleCompatibleAdapter implements ProviderAdapter {
       });
     } catch (err) {
       clearTimeout(timer);
-      if (request.signal) request.signal.removeEventListener("abort", onAbort);
+
+      if (request.signal) {
+        request.signal.removeEventListener("abort", onAbort);
+      }
+
       throw normalizeError(err);
     }
 
     if (!res.ok) {
       const errBody = await safeJson(res);
+
       clearTimeout(timer);
-      if (request.signal) request.signal.removeEventListener("abort", onAbort);
-      throw classifyProviderError({ status: res.status, body: errBody });
+
+      if (request.signal) {
+        request.signal.removeEventListener("abort", onAbort);
+      }
+
+      throw classifyProviderError({
+        status: res.status,
+        body: errBody,
+      });
     }
 
     if (!res.body) {
       clearTimeout(timer);
-      if (request.signal) request.signal.removeEventListener("abort", onAbort);
-      throw classifyProviderError({ status: res.status, body: "no response body" });
+
+      if (request.signal) {
+        request.signal.removeEventListener("abort", onAbort);
+      }
+
+      throw classifyProviderError({
+        status: res.status,
+        body: "no response body",
+      });
     }
 
     // Gemini function calls arrive whole; we emit start → delta → end so the
@@ -363,6 +486,7 @@ export class GoogleCompatibleAdapter implements ProviderAdapter {
         if (data === "[DONE]") break;
 
         let chunk: GeminiStreamChunk;
+
         try {
           chunk = JSON.parse(data) as GeminiStreamChunk;
         } catch {
@@ -372,6 +496,7 @@ export class GoogleCompatibleAdapter implements ProviderAdapter {
         // Usage.
         if (chunk.usageMetadata) {
           const u = chunk.usageMetadata;
+
           yield {
             type: "usage",
             inputTokens: u.promptTokenCount ?? 0,
@@ -383,61 +508,110 @@ export class GoogleCompatibleAdapter implements ProviderAdapter {
         if (!cand) continue;
 
         const parts = cand.content?.parts ?? [];
+
         for (const p of parts) {
-          if (typeof p.text === "string" && p.text.length > 0) {
-            yield { type: "text-delta", text: p.text };
+          if (
+            typeof p.text === "string" &&
+            p.text.length > 0
+          ) {
+            yield {
+              type: "text-delta",
+              text: p.text,
+            };
           }
 
           if (p.functionCall) {
             sawToolCalls = true;
             toolSeq++;
+
             const id = "call_" + toolSeq;
-            yield { type: "tool-call-start", id, name: p.functionCall.name };
-            const argsJson = safeStringify(p.functionCall.args ?? {});
+
+            yield {
+              type: "tool-call-start",
+              id,
+              name: p.functionCall.name,
+            };
+
+            const argsJson = safeStringify(
+              p.functionCall.args ?? {}
+            );
+
             if (argsJson.length > 0) {
-              yield { type: "tool-call-delta", id, argumentsDelta: argsJson };
+              yield {
+                type: "tool-call-delta",
+                id,
+                argumentsDelta: argsJson,
+              };
             }
-            yield { type: "tool-call-end", id };
+
+            yield {
+              type: "tool-call-end",
+              id,
+            };
           }
         }
 
         if (cand.finishReason) {
-          finishReason = mapFinish(cand.finishReason, sawToolCalls);
+          finishReason = mapFinish(
+            cand.finishReason,
+            sawToolCalls
+          );
         }
       }
 
-      yield { type: "done", finishReason: sawToolCalls ? "tool-calls" : finishReason };
+      yield {
+        type: "done",
+        finishReason: sawToolCalls
+          ? "tool-calls"
+          : finishReason,
+      };
     } catch (err) {
       if (isAbort(err)) {
-        yield { type: "done", finishReason: "aborted" };
+        yield {
+          type: "done",
+          finishReason: "aborted",
+        };
         return;
       }
+
       throw normalizeError(err);
     } finally {
       clearTimeout(timer);
-      if (request.signal) request.signal.removeEventListener("abort", onAbort);
+
+      if (request.signal) {
+        request.signal.removeEventListener(
+          "abort",
+          onAbort
+        );
+      }
     }
   }
 }
-
 
 // ------------------------------------------------------------------
 // Helpers
 // ------------------------------------------------------------------
 
-function mapFinish(raw: string, sawToolCalls: boolean): FinishReason {
+function mapFinish(
+  raw: string,
+  sawToolCalls: boolean
+): FinishReason {
   switch (raw) {
     case "STOP":
       return sawToolCalls ? "tool-calls" : "stop";
+
     case "MAX_TOKENS":
       return "length";
+
     case "SAFETY":
     case "RECITATION":
     case "BLOCKLIST":
     case "PROHIBITED_CONTENT":
       return "stop";
+
     case "TOOL_CALLS":
       return "tool-calls";
+
     default:
       return sawToolCalls ? "tool-calls" : "stop";
   }
@@ -453,8 +627,16 @@ function safeStringify(v: unknown): string {
 
 function isAbort(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
-  const e = err as { name?: string; code?: string };
-  return e.name === "AbortError" || e.code === "ABORT_ERR";
+
+  const e = err as {
+    name?: string;
+    code?: string;
+  };
+
+  return (
+    e.name === "AbortError" ||
+    e.code === "ABORT_ERR"
+  );
 }
 
 async function safeJson(res: Response): Promise<unknown> {
@@ -468,7 +650,6 @@ async function safeJson(res: Response): Promise<unknown> {
     }
   }
 }
-
 
 // ------------------------------------------------------------------
 // SSE parser (same shape as the other adapters; local for self-containment)
@@ -484,19 +665,32 @@ async function* parseSse(
   try {
     while (true) {
       const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
 
-      let idx: number;
-      while ((idx = findFrameEnd(buffer)) !== -1) {
-        const frame = buffer.slice(0, idx.end);
-        buffer = buffer.slice(idx.end + idx.len);
+      if (done) break;
+
+      buffer += decoder.decode(value, {
+        stream: true,
+      });
+
+      let f: { end: number; len: number } | null;
+
+      while ((f = findFrameEnd(buffer)) !== null) {
+        const frame = buffer.slice(0, f.end);
+        buffer = buffer.slice(f.end + f.len);
+
         const data = extractData(frame);
-        if (data !== null) yield data;
+
+        if (data !== null) {
+          yield data;
+        }
       }
     }
+
     const data = extractData(buffer);
-    if (data !== null) yield data;
+
+    if (data !== null) {
+      yield data;
+    }
   } finally {
     try {
       reader.releaseLock();
@@ -506,23 +700,33 @@ async function* parseSse(
   }
 }
 
-function findFrameEnd(s: string): { end: number; len: number } | null {
+function findFrameEnd(
+  s: string
+): { end: number; len: number } | null {
   const lf = s.indexOf("\n\n");
   const crlf = s.indexOf("\r\n\r\n");
+
   if (lf === -1 && crlf === -1) return null;
   if (lf === -1) return { end: crlf, len: 4 };
   if (crlf === -1) return { end: lf, len: 2 };
-  return lf < crlf ? { end: lf, len: 2 } : { end: crlf, len: 4 };
+
+  return lf < crlf
+    ? { end: lf, len: 2 }
+    : { end: crlf, len: 4 };
 }
 
 function extractData(frame: string): string | null {
   const lines = frame.split(/\r?\n/);
   const dataLines: string[] = [];
+
   for (const line of lines) {
     if (!line.startsWith("data:")) continue;
+
     const payload = line.slice(5).replace(/^ /, "");
     dataLines.push(payload);
   }
+
   if (dataLines.length === 0) return null;
+
   return dataLines.join("\n");
 }

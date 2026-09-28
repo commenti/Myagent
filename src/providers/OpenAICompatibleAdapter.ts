@@ -21,7 +21,6 @@ import {
 import { classifyProviderError, normalizeError } from "./ErrorClassifier";
 import { getCapabilities } from "./CapabilityRegistry";
 
-
 // ------------------------------------------------------------------
 // OpenAI wire types (minimal subset we actually read)
 // ------------------------------------------------------------------
@@ -60,14 +59,12 @@ interface OaiRequestBody {
   max_tokens?: number;
 }
 
-
 // ------------------------------------------------------------------
 // Adapter
 // ------------------------------------------------------------------
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 const HANDSHAKE_TIMEOUT_MS = 20_000;
-
 
 export class OpenAICompatibleAdapter implements ProviderAdapter {
   public readonly id = "openai-compatible";
@@ -83,7 +80,6 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
     this.capabilities = getCapabilities("");
   }
 
-
   // ----------------------------------------------------------------
   // URL helpers
   // ----------------------------------------------------------------
@@ -95,7 +91,6 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
     return `${trimmed}/v1/chat/completions`;
   }
 
-
   // ----------------------------------------------------------------
   // Message mapping (neutral → OpenAI)
   // ----------------------------------------------------------------
@@ -106,6 +101,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
       const text = msg.parts
         .map((p) => (p.kind === "text" ? p.text : ""))
         .join("");
+
       return {
         role: "tool",
         tool_call_id: msg.toolCallId ?? "",
@@ -118,38 +114,61 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
       const text = msg.parts
         .map((p) => (p.kind === "text" ? p.text : ""))
         .join("");
+
       const out: Record<string, unknown> = { role: "assistant" };
+
       if (text.length > 0) out.content = text;
+
       if (msg.toolCalls && msg.toolCalls.length > 0) {
         out.tool_calls = msg.toolCalls.map((tc) => ({
           id: tc.id,
           type: "function",
-          function: { name: tc.name, arguments: tc.argumentsJson },
+          function: {
+            name: tc.name,
+            arguments: tc.argumentsJson,
+          },
         }));
       }
+
       return out;
     }
 
     // system / user — may include images
     const hasImage = msg.parts.some((p) => p.kind === "image");
+
     if (!hasImage) {
       const text = msg.parts
         .map((p) => (p.kind === "text" ? p.text : ""))
         .join("");
-      return { role: msg.role, content: text };
+
+      return {
+        role: msg.role,
+        content: text,
+      };
     }
 
     // Multimodal content array
     const content = msg.parts.map((p) => {
-      if (p.kind === "text") return { type: "text", text: p.text };
+      if (p.kind === "text") {
+        return {
+          type: "text",
+          text: p.text,
+        };
+      }
+
       return {
         type: "image_url",
-        image_url: { url: `data:${p.mimeType};base64,${p.base64}` },
+        image_url: {
+          url: `data:${p.mimeType};base64,${p.base64}`,
+        },
       };
     });
-    return { role: msg.role, content };
-  }
 
+    return {
+      role: msg.role,
+      content,
+    };
+  }
 
   // ----------------------------------------------------------------
   // Tool mapping
@@ -166,29 +185,34 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
     };
   }
 
-
   // ----------------------------------------------------------------
   // Request body builder
   // ----------------------------------------------------------------
 
-  private buildBody(request: ChatRequest, stream: boolean): OaiRequestBody {
+  private buildBody(
+    request: ChatRequest,
+    stream: boolean
+  ): OaiRequestBody {
     const body: OaiRequestBody = {
       model: request.model,
       messages: request.messages.map((m) => this.toOpenAiMessage(m)),
       stream,
     };
+
     if (request.tools && request.tools.length > 0) {
       body.tools = request.tools.map((t) => this.toOpenAiTool(t));
     }
+
     if (typeof request.temperature === "number") {
       body.temperature = request.temperature;
     }
+
     if (typeof request.maxOutputTokens === "number") {
       body.max_tokens = request.maxOutputTokens;
     }
+
     return body;
   }
-
 
   // ----------------------------------------------------------------
   // Handshake
@@ -197,7 +221,11 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
   public async handshake(config: AdapterConfig): Promise<void> {
     const url = this.chatUrl(config.baseUrl);
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), HANDSHAKE_TIMEOUT_MS);
+
+    const timer = setTimeout(
+      () => controller.abort(),
+      HANDSHAKE_TIMEOUT_MS
+    );
 
     try {
       const res = await this.fetchImpl(url, {
@@ -217,8 +245,12 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
 
       if (!res.ok) {
         const body = await safeJson(res);
-        throw classifyProviderError({ status: res.status, body });
+        throw classifyProviderError({
+          status: res.status,
+          body,
+        });
       }
+
       // Success — drain and discard.
       await res.text();
     } catch (err) {
@@ -227,7 +259,6 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
       clearTimeout(timer);
     }
   }
-
 
   // ----------------------------------------------------------------
   // Streaming chat
@@ -242,13 +273,24 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
 
     const controller = new AbortController();
     const onAbort = () => controller.abort();
+
     if (request.signal) {
-      if (request.signal.aborted) controller.abort();
-      else request.signal.addEventListener("abort", onAbort, { once: true });
+      if (request.signal.aborted) {
+        controller.abort();
+      } else {
+        request.signal.addEventListener("abort", onAbort, {
+          once: true,
+        });
+      }
     }
-    const timer = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+
+    const timer = setTimeout(
+      () => controller.abort(),
+      DEFAULT_TIMEOUT_MS
+    );
 
     let res: Response;
+
     try {
       res = await this.fetchImpl(url, {
         method: "POST",
@@ -262,21 +304,40 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
       });
     } catch (err) {
       clearTimeout(timer);
-      if (request.signal) request.signal.removeEventListener("abort", onAbort);
+
+      if (request.signal) {
+        request.signal.removeEventListener("abort", onAbort);
+      }
+
       throw normalizeError(err);
     }
 
     if (!res.ok) {
       const errBody = await safeJson(res);
+
       clearTimeout(timer);
-      if (request.signal) request.signal.removeEventListener("abort", onAbort);
-      throw classifyProviderError({ status: res.status, body: errBody });
+
+      if (request.signal) {
+        request.signal.removeEventListener("abort", onAbort);
+      }
+
+      throw classifyProviderError({
+        status: res.status,
+        body: errBody,
+      });
     }
 
     if (!res.body) {
       clearTimeout(timer);
-      if (request.signal) request.signal.removeEventListener("abort", onAbort);
-      throw classifyProviderError({ status: res.status, body: "no response body" });
+
+      if (request.signal) {
+        request.signal.removeEventListener("abort", onAbort);
+      }
+
+      throw classifyProviderError({
+        status: res.status,
+        body: "no response body",
+      });
     }
 
     // Track tool calls by index → id.
@@ -288,6 +349,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
         if (data === "[DONE]") break;
 
         let chunk: OaiStreamChunk;
+
         try {
           chunk = JSON.parse(data) as OaiStreamChunk;
         } catch {
@@ -307,9 +369,16 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
         if (!choice) continue;
 
         const delta = choice.delta;
+
         if (delta) {
-          if (typeof delta.content === "string" && delta.content.length > 0) {
-            yield { type: "text-delta", text: delta.content };
+          if (
+            typeof delta.content === "string" &&
+            delta.content.length > 0
+          ) {
+            yield {
+              type: "text-delta",
+              text: delta.content,
+            };
           }
 
           if (Array.isArray(delta.tool_calls)) {
@@ -318,11 +387,18 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
 
               if (tc.id && !toolIds.has(idx)) {
                 const name = tc.function?.name ?? "";
+
                 toolIds.set(idx, tc.id);
-                yield { type: "tool-call-start", id: tc.id, name };
+
+                yield {
+                  type: "tool-call-start",
+                  id: tc.id,
+                  name,
+                };
               }
 
               const id = toolIds.get(idx);
+
               if (id && tc.function?.arguments) {
                 yield {
                   type: "tool-call-delta",
@@ -335,45 +411,67 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
         }
 
         if (choice.finish_reason) {
-          finishReason = mapFinishReason(choice.finish_reason, toolIds.size > 0);
+          finishReason = mapFinishReason(
+            choice.finish_reason,
+            toolIds.size > 0
+          );
         }
       }
 
       // Close any open tool calls cleanly.
       for (const id of toolIds.values()) {
-        yield { type: "tool-call-end", id };
+        yield {
+          type: "tool-call-end",
+          id,
+        };
       }
 
-      yield { type: "done", finishReason };
+      yield {
+        type: "done",
+        finishReason,
+      };
     } catch (err) {
       if (isAbort(err)) {
-        yield { type: "done", finishReason: "aborted" };
+        yield {
+          type: "done",
+          finishReason: "aborted",
+        };
         return;
       }
+
       throw normalizeError(err);
     } finally {
       clearTimeout(timer);
-      if (request.signal) request.signal.removeEventListener("abort", onAbort);
+
+      if (request.signal) {
+        request.signal.removeEventListener("abort", onAbort);
+      }
     }
   }
 }
-
 
 // ------------------------------------------------------------------
 // Helpers
 // ------------------------------------------------------------------
 
-function mapFinishReason(raw: string, sawToolCalls: boolean): FinishReason {
+function mapFinishReason(
+  raw: string,
+  sawToolCalls: boolean
+): FinishReason {
   switch (raw) {
     case "stop":
       return sawToolCalls ? "tool-calls" : "stop";
+
     case "tool_calls":
     case "function_call":
       return "tool-calls";
+
     case "length":
       return "length";
+
     case "content_filter":
       return "stop";
+
     default:
       return "stop";
   }
@@ -381,8 +479,16 @@ function mapFinishReason(raw: string, sawToolCalls: boolean): FinishReason {
 
 function isAbort(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
-  const e = err as { name?: string; code?: string };
-  return e.name === "AbortError" || e.code === "ABORT_ERR";
+
+  const e = err as {
+    name?: string;
+    code?: string;
+  };
+
+  return (
+    e.name === "AbortError" ||
+    e.code === "ABORT_ERR"
+  );
 }
 
 async function safeJson(res: Response): Promise<unknown> {
@@ -396,7 +502,6 @@ async function safeJson(res: Response): Promise<unknown> {
     }
   }
 }
-
 
 // ------------------------------------------------------------------
 // Minimal SSE parser over a ReadableStream<Uint8Array>
@@ -412,21 +517,32 @@ async function* parseSse(
   try {
     while (true) {
       const { value, done } = await reader.read();
+
       if (done) break;
+
       buffer += decoder.decode(value, { stream: true });
 
       // SSE frames are separated by a blank line (\n\n or \r\n\r\n).
-      let idx: number;
-      while ((idx = findFrameEnd(buffer)) !== -1) {
-        const frame = buffer.slice(0, idx.end);
-        buffer = buffer.slice(idx.end + idx.len);
+      let f: { end: number; len: number } | null;
+
+      while ((f = findFrameEnd(buffer)) !== null) {
+        const frame = buffer.slice(0, f.end);
+        buffer = buffer.slice(f.end + f.len);
+
         const data = extractData(frame);
-        if (data !== null) yield data;
+
+        if (data !== null) {
+          yield data;
+        }
       }
     }
+
     // Flush any trailing frame without a final blank line.
     const data = extractData(buffer);
-    if (data !== null) yield data;
+
+    if (data !== null) {
+      yield data;
+    }
   } finally {
     try {
       reader.releaseLock();
@@ -436,23 +552,33 @@ async function* parseSse(
   }
 }
 
-function findFrameEnd(s: string): { end: number; len: number } | null {
+function findFrameEnd(
+  s: string
+): { end: number; len: number } | null {
   const lf = s.indexOf("\n\n");
   const crlf = s.indexOf("\r\n\r\n");
+
   if (lf === -1 && crlf === -1) return null;
   if (lf === -1) return { end: crlf, len: 4 };
   if (crlf === -1) return { end: lf, len: 2 };
-  return lf < crlf ? { end: lf, len: 2 } : { end: crlf, len: 4 };
+
+  return lf < crlf
+    ? { end: lf, len: 2 }
+    : { end: crlf, len: 4 };
 }
 
 function extractData(frame: string): string | null {
   const lines = frame.split(/\r?\n/);
   const dataLines: string[] = [];
+
   for (const line of lines) {
     if (!line.startsWith("data:")) continue;
+
     const payload = line.slice(5).replace(/^ /, "");
     dataLines.push(payload);
   }
+
   if (dataLines.length === 0) return null;
+
   return dataLines.join("\n");
 }

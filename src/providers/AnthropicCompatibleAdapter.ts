@@ -27,7 +27,6 @@ import {
 import { classifyProviderError, normalizeError } from "./ErrorClassifier";
 import { getCapabilities } from "./CapabilityRegistry";
 
-
 // ------------------------------------------------------------------
 // Constants
 // ------------------------------------------------------------------
@@ -36,7 +35,6 @@ const ANTHROPIC_VERSION = "2023-06-01";
 const DEFAULT_TIMEOUT_MS = 120_000;
 const HANDSHAKE_TIMEOUT_MS = 20_000;
 const DEFAULT_MAX_OUTPUT = 4_096;
-
 
 // ------------------------------------------------------------------
 // Wire types (minimal subset we read)
@@ -103,7 +101,6 @@ interface AnthStreamEvent {
   usage?: { input_tokens?: number; output_tokens?: number };
 }
 
-
 // ------------------------------------------------------------------
 // Adapter
 // ------------------------------------------------------------------
@@ -119,7 +116,6 @@ export class AnthropicCompatibleAdapter implements ProviderAdapter {
     this.capabilities = getCapabilities("");
   }
 
-
   // ----------------------------------------------------------------
   // URL
   // ----------------------------------------------------------------
@@ -131,7 +127,6 @@ export class AnthropicCompatibleAdapter implements ProviderAdapter {
     return trimmed + "/v1/messages";
   }
 
-
   // ----------------------------------------------------------------
   // Message mapping (neutral → Anthropic)
   // ----------------------------------------------------------------
@@ -142,17 +137,23 @@ export class AnthropicCompatibleAdapter implements ProviderAdapter {
   } {
     const systems: string[] = [];
     const rest: ChatMessage[] = [];
+
     for (const m of messages) {
       if (m.role === "system") {
         const text = m.parts
           .map((p) => (p.kind === "text" ? p.text : ""))
           .join("\n");
+
         if (text.length > 0) systems.push(text);
       } else {
         rest.push(m);
       }
     }
-    return { system: systems.join("\n\n"), rest };
+
+    return {
+      system: systems.join("\n\n"),
+      rest,
+    };
   }
 
   private toAnthBlock(msg: ChatMessage): AnthContentBlock[] {
@@ -163,18 +164,25 @@ export class AnthropicCompatibleAdapter implements ProviderAdapter {
       const text = msg.parts
         .map((p) => (p.kind === "text" ? p.text : ""))
         .join("");
+
       blocks.push({
         type: "tool_result",
         tool_use_id: msg.toolCallId ?? "",
         content: text,
       });
+
       return blocks;
     }
 
     // Text + image parts.
     for (const part of msg.parts) {
       if (part.kind === "text") {
-        if (part.text.length > 0) blocks.push({ type: "text", text: part.text });
+        if (part.text.length > 0) {
+          blocks.push({
+            type: "text",
+            text: part.text,
+          });
+        }
       } else if (part.kind === "image") {
         blocks.push({
           type: "image",
@@ -188,14 +196,20 @@ export class AnthropicCompatibleAdapter implements ProviderAdapter {
     }
 
     // Assistant tool calls become tool_use blocks.
-    if (msg.role === "assistant" && msg.toolCalls && msg.toolCalls.length > 0) {
+    if (
+      msg.role === "assistant" &&
+      msg.toolCalls &&
+      msg.toolCalls.length > 0
+    ) {
       for (const tc of msg.toolCalls) {
         let parsed: unknown = {};
+
         try {
           parsed = JSON.parse(tc.argumentsJson || "{}");
         } catch {
           parsed = {};
         }
+
         blocks.push({
           type: "tool_use",
           id: tc.id,
@@ -206,7 +220,13 @@ export class AnthropicCompatibleAdapter implements ProviderAdapter {
     }
 
     // Anthropic requires at least one content block per message.
-    if (blocks.length === 0) blocks.push({ type: "text", text: "" });
+    if (blocks.length === 0) {
+      blocks.push({
+        type: "text",
+        text: "",
+      });
+    }
+
     return blocks;
   }
 
@@ -223,23 +243,36 @@ export class AnthropicCompatibleAdapter implements ProviderAdapter {
       // "tool" role is delivered on the user side.
       const role: "user" | "assistant" =
         m.role === "assistant" ? "assistant" : "user";
+
       const blocks = this.toAnthBlock(m);
 
       const last = out[out.length - 1];
+
       if (last && last.role === role) {
         last.content.push(...blocks);
       } else {
-        out.push({ role, content: blocks });
+        out.push({
+          role,
+          content: blocks,
+        });
       }
     }
 
     // Anthropic requires the first message to be user.
     if (out.length > 0 && out[0].role === "assistant") {
-      out.unshift({ role: "user", content: [{ type: "text", text: "" }] });
+      out.unshift({
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: "",
+          },
+        ],
+      });
     }
+
     return out;
   }
-
 
   // ----------------------------------------------------------------
   // Tools
@@ -253,46 +286,60 @@ export class AnthropicCompatibleAdapter implements ProviderAdapter {
     };
   }
 
-
   // ----------------------------------------------------------------
   // Request builder
   // ----------------------------------------------------------------
 
-  private buildBody(request: ChatRequest, stream: boolean): AnthRequestBody {
+  private buildBody(
+    request: ChatRequest,
+    stream: boolean
+  ): AnthRequestBody {
     const { system, rest } = this.splitSystem(request.messages);
     const messages = this.toAnthMessages(rest);
 
     const body: AnthRequestBody = {
       model: request.model,
-      max_tokens: request.maxOutputTokens ?? DEFAULT_MAX_OUTPUT,
+      max_tokens:
+        request.maxOutputTokens ?? DEFAULT_MAX_OUTPUT,
       messages,
       stream,
     };
-    if (system.length > 0) body.system = system;
+
+    if (system.length > 0) {
+      body.system = system;
+    }
+
     if (request.tools && request.tools.length > 0) {
       body.tools = request.tools.map((t) => this.toAnthTool(t));
     }
+
     if (typeof request.temperature === "number") {
       body.temperature = request.temperature;
     }
+
     return body;
   }
-
 
   // ----------------------------------------------------------------
   // Headers
   // ----------------------------------------------------------------
 
-  private headers(apiKey: string, stream: boolean): Record<string, string> {
+  private headers(
+    apiKey: string,
+    stream: boolean
+  ): Record<string, string> {
     const h: Record<string, string> = {
       "Content-Type": "application/json",
       "x-api-key": apiKey,
       "anthropic-version": ANTHROPIC_VERSION,
     };
-    if (stream) h["Accept"] = "text/event-stream";
+
+    if (stream) {
+      h["Accept"] = "text/event-stream";
+    }
+
     return h;
   }
-
 
   // ----------------------------------------------------------------
   // Handshake
@@ -301,7 +348,11 @@ export class AnthropicCompatibleAdapter implements ProviderAdapter {
   public async handshake(config: AdapterConfig): Promise<void> {
     const url = this.messagesUrl(config.baseUrl);
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), HANDSHAKE_TIMEOUT_MS);
+
+    const timer = setTimeout(
+      () => controller.abort(),
+      HANDSHAKE_TIMEOUT_MS
+    );
 
     try {
       const res = await this.fetchImpl(url, {
@@ -310,15 +361,29 @@ export class AnthropicCompatibleAdapter implements ProviderAdapter {
         body: JSON.stringify({
           model: config.model,
           max_tokens: 1,
-          messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: "hi",
+                },
+              ],
+            },
+          ],
         }),
         signal: controller.signal,
       });
 
       if (!res.ok) {
         const body = await safeJson(res);
-        throw classifyProviderError({ status: res.status, body });
+        throw classifyProviderError({
+          status: res.status,
+          body,
+        });
       }
+
       await res.text();
     } catch (err) {
       throw normalizeError(err);
@@ -326,7 +391,6 @@ export class AnthropicCompatibleAdapter implements ProviderAdapter {
       clearTimeout(timer);
     }
   }
-
 
   // ----------------------------------------------------------------
   // Streaming
@@ -341,13 +405,24 @@ export class AnthropicCompatibleAdapter implements ProviderAdapter {
 
     const controller = new AbortController();
     const onAbort = () => controller.abort();
+
     if (request.signal) {
-      if (request.signal.aborted) controller.abort();
-      else request.signal.addEventListener("abort", onAbort, { once: true });
+      if (request.signal.aborted) {
+        controller.abort();
+      } else {
+        request.signal.addEventListener("abort", onAbort, {
+          once: true,
+        });
+      }
     }
-    const timer = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+
+    const timer = setTimeout(
+      () => controller.abort(),
+      DEFAULT_TIMEOUT_MS
+    );
 
     let res: Response;
+
     try {
       res = await this.fetchImpl(url, {
         method: "POST",
@@ -357,21 +432,40 @@ export class AnthropicCompatibleAdapter implements ProviderAdapter {
       });
     } catch (err) {
       clearTimeout(timer);
-      if (request.signal) request.signal.removeEventListener("abort", onAbort);
+
+      if (request.signal) {
+        request.signal.removeEventListener("abort", onAbort);
+      }
+
       throw normalizeError(err);
     }
 
     if (!res.ok) {
       const errBody = await safeJson(res);
+
       clearTimeout(timer);
-      if (request.signal) request.signal.removeEventListener("abort", onAbort);
-      throw classifyProviderError({ status: res.status, body: errBody });
+
+      if (request.signal) {
+        request.signal.removeEventListener("abort", onAbort);
+      }
+
+      throw classifyProviderError({
+        status: res.status,
+        body: errBody,
+      });
     }
 
     if (!res.body) {
       clearTimeout(timer);
-      if (request.signal) request.signal.removeEventListener("abort", onAbort);
-      throw classifyProviderError({ status: res.status, body: "no response body" });
+
+      if (request.signal) {
+        request.signal.removeEventListener("abort", onAbort);
+      }
+
+      throw classifyProviderError({
+        status: res.status,
+        body: "no response body",
+      });
     }
 
     // Track tool_use blocks by index.
@@ -382,6 +476,7 @@ export class AnthropicCompatibleAdapter implements ProviderAdapter {
     try {
       for await (const raw of parseSse(res.body)) {
         let ev: AnthStreamEvent;
+
         try {
           ev = JSON.parse(raw) as AnthStreamEvent;
         } catch {
@@ -394,22 +489,35 @@ export class AnthropicCompatibleAdapter implements ProviderAdapter {
 
         if (t === "message_start" && ev.message?.usage) {
           const u = ev.message.usage;
+
           yield {
             type: "usage",
             inputTokens: u.input_tokens ?? 0,
             outputTokens: u.output_tokens ?? 0,
           };
+
           continue;
         }
 
         if (t === "content_block_start" && ev.content_block) {
           const idx = ev.index ?? 0;
           const cb = ev.content_block;
-          if (cb.type === "tool_use" && cb.id && cb.name) {
+
+          if (
+            cb.type === "tool_use" &&
+            cb.id &&
+            cb.name
+          ) {
             toolIds.set(idx, cb.id);
             toolNames.set(idx, cb.name);
-            yield { type: "tool-call-start", id: cb.id, name: cb.name };
+
+            yield {
+              type: "tool-call-start",
+              id: cb.id,
+              name: cb.name,
+            };
           }
+
           continue;
         }
 
@@ -417,10 +525,21 @@ export class AnthropicCompatibleAdapter implements ProviderAdapter {
           const idx = ev.index ?? 0;
           const d = ev.delta;
 
-          if (d.type === "text_delta" && typeof d.text === "string" && d.text.length > 0) {
-            yield { type: "text-delta", text: d.text };
-          } else if (d.type === "input_json_delta" && typeof d.partial_json === "string") {
+          if (
+            d.type === "text_delta" &&
+            typeof d.text === "string" &&
+            d.text.length > 0
+          ) {
+            yield {
+              type: "text-delta",
+              text: d.text,
+            };
+          } else if (
+            d.type === "input_json_delta" &&
+            typeof d.partial_json === "string"
+          ) {
             const id = toolIds.get(idx);
+
             if (id) {
               yield {
                 type: "tool-call-delta",
@@ -429,13 +548,21 @@ export class AnthropicCompatibleAdapter implements ProviderAdapter {
               };
             }
           }
+
           continue;
         }
 
         if (t === "content_block_stop") {
           const idx = ev.index ?? 0;
           const id = toolIds.get(idx);
-          if (id) yield { type: "tool-call-end", id };
+
+          if (id) {
+            yield {
+              type: "tool-call-end",
+              id,
+            };
+          }
+
           continue;
         }
 
@@ -447,48 +574,71 @@ export class AnthropicCompatibleAdapter implements ProviderAdapter {
               outputTokens: ev.usage.output_tokens ?? 0,
             };
           }
+
           if (ev.delta?.stop_reason) {
-            stopReason = mapStopReason(ev.delta.stop_reason, toolIds.size > 0);
+            stopReason = mapStopReason(
+              ev.delta.stop_reason,
+              toolIds.size > 0
+            );
           }
+
           continue;
         }
 
         if (t === "message_stop") break;
 
         if (t === "error") {
-          throw classifyProviderError({ body: ev });
+          throw classifyProviderError({
+            body: ev,
+          });
         }
       }
 
-      yield { type: "done", finishReason: stopReason };
+      yield {
+        type: "done",
+        finishReason: stopReason,
+      };
     } catch (err) {
       if (isAbort(err)) {
-        yield { type: "done", finishReason: "aborted" };
+        yield {
+          type: "done",
+          finishReason: "aborted",
+        };
         return;
       }
+
       throw normalizeError(err);
     } finally {
       clearTimeout(timer);
-      if (request.signal) request.signal.removeEventListener("abort", onAbort);
+
+      if (request.signal) {
+        request.signal.removeEventListener("abort", onAbort);
+      }
     }
   }
 }
-
 
 // ------------------------------------------------------------------
 // Helpers
 // ------------------------------------------------------------------
 
-function mapStopReason(raw: string, sawToolCalls: boolean): FinishReason {
+function mapStopReason(
+  raw: string,
+  sawToolCalls: boolean
+): FinishReason {
   switch (raw) {
     case "end_turn":
       return sawToolCalls ? "tool-calls" : "stop";
+
     case "stop_sequence":
       return "stop";
+
     case "max_tokens":
       return "length";
+
     case "tool_use":
       return "tool-calls";
+
     default:
       return sawToolCalls ? "tool-calls" : "stop";
   }
@@ -496,8 +646,16 @@ function mapStopReason(raw: string, sawToolCalls: boolean): FinishReason {
 
 function isAbort(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
-  const e = err as { name?: string; code?: string };
-  return e.name === "AbortError" || e.code === "ABORT_ERR";
+
+  const e = err as {
+    name?: string;
+    code?: string;
+  };
+
+  return (
+    e.name === "AbortError" ||
+    e.code === "ABORT_ERR"
+  );
 }
 
 async function safeJson(res: Response): Promise<unknown> {
@@ -511,7 +669,6 @@ async function safeJson(res: Response): Promise<unknown> {
     }
   }
 }
-
 
 // ------------------------------------------------------------------
 // SSE parser (shared shape with OpenAI adapter; kept local to avoid a
@@ -528,19 +685,32 @@ async function* parseSse(
   try {
     while (true) {
       const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
 
-      let idx: number;
-      while ((idx = findFrameEnd(buffer)) !== -1) {
-        const frame = buffer.slice(0, idx.end);
-        buffer = buffer.slice(idx.end + idx.len);
+      if (done) break;
+
+      buffer += decoder.decode(value, {
+        stream: true,
+      });
+
+      let f: { end: number; len: number } | null;
+
+      while ((f = findFrameEnd(buffer)) !== null) {
+        const frame = buffer.slice(0, f.end);
+        buffer = buffer.slice(f.end + f.len);
+
         const data = extractData(frame);
-        if (data !== null) yield data;
+
+        if (data !== null) {
+          yield data;
+        }
       }
     }
+
     const data = extractData(buffer);
-    if (data !== null) yield data;
+
+    if (data !== null) {
+      yield data;
+    }
   } finally {
     try {
       reader.releaseLock();
@@ -550,23 +720,33 @@ async function* parseSse(
   }
 }
 
-function findFrameEnd(s: string): { end: number; len: number } | null {
+function findFrameEnd(
+  s: string
+): { end: number; len: number } | null {
   const lf = s.indexOf("\n\n");
   const crlf = s.indexOf("\r\n\r\n");
+
   if (lf === -1 && crlf === -1) return null;
   if (lf === -1) return { end: crlf, len: 4 };
   if (crlf === -1) return { end: lf, len: 2 };
-  return lf < crlf ? { end: lf, len: 2 } : { end: crlf, len: 4 };
+
+  return lf < crlf
+    ? { end: lf, len: 2 }
+    : { end: crlf, len: 4 };
 }
 
 function extractData(frame: string): string | null {
   const lines = frame.split(/\r?\n/);
   const dataLines: string[] = [];
+
   for (const line of lines) {
     if (!line.startsWith("data:")) continue;
+
     const payload = line.slice(5).replace(/^ /, "");
     dataLines.push(payload);
   }
+
   if (dataLines.length === 0) return null;
+
   return dataLines.join("\n");
 }
