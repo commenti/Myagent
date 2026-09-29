@@ -12,7 +12,11 @@ import { render } from "ink";
 
 import { Renderer } from "./ui/Renderer";
 import { loadHomeConfig, type HomeConfig } from "./config/HomeConfig";
-import { loadProjectConfig, type ProjectConfig } from "./config/ProjectConfig";
+import {
+  loadProjectConfig,
+  type ProjectConfig,
+  type PermissionMode,
+} from "./config/ProjectConfig";
 import { ResumeManager, type ResumeState } from "./session/ResumeManager";
 
 import { getActiveProfile } from "./config/HomeConfig";
@@ -28,6 +32,7 @@ import type {
 import { normalizeError, ProviderError } from "./providers/ErrorClassifier";
 import { SessionLog } from "./session/SessionLog";
 import type { ActivityItem } from "./ui/ActivityStream";
+import { askPermission } from "./ui/permissionPrompt";
 import { PermissionManager } from "./policy/PermissionManager";
 import { loadAgentsMd } from "./memory/AgentsMdLoader";
 import { loadInstructions, assembleInstructionBlock } from "./memory/InstructionLoader";
@@ -428,19 +433,25 @@ function buildTurnRunner(
       await sessionLog.append({ kind: "user", text });
     } catch { /* non-fatal */ }
 
-    // 5. Permissions.
-    const mode = projectConfig.permission ?? "ask-every-time";
+    // 6. Permissions — reload each turn so a mode change (first-run picker
+    //    or a manual edit to .agent-runtime/permission.json) is picked up.
+    let currentMode: PermissionMode = projectConfig.permission ?? "ask-every-time";
+    try {
+      const fresh = await loadProjectConfig(cwd);
+      currentMode = fresh.permission ?? "ask-every-time";
+    } catch { /* use fallback */ }
+
     const permissions = new PermissionManager({
-      mode,
+      mode: currentMode,
       prompt: async (req) => {
-        const allow = mode === "all-allowed";
+        // Show the request in the activity stream, then wait for the user's
+        // y/n in the Renderer. In all-allowed mode this is only reached for
+        // dangerous terminal commands (PermissionManager handles that).
         emit({
           type: "note",
-          text:
-            "permission (" + mode + "): " + req.summary + " -> " +
-            (allow ? "allow" : "deny"),
+          text: "permission requested (" + currentMode + "): " + req.summary,
         });
-        return allow;
+        return await askPermission(req);
       },
     });
 

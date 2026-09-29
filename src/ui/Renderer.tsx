@@ -46,12 +46,17 @@ import type { HomeConfig } from "../config/HomeConfig";
 import type { ProjectConfig } from "../config/ProjectConfig";
 import type { ResumeState } from "../session/ResumeManager";
 import { SessionLog } from "../session/SessionLog";
-import { PermissionManager } from "../policy/PermissionManager";
 
 import { saveAndActivate } from "../commands/apiCommand";
 import { InstructionScopeMenu, type InstructionScope } from "./InstructionScopeMenu";
 import { InstructionEditor } from "./InstructionEditor";
 import { run as runClear } from "../commands/clearCommand";
+import type { PermissionRequest } from "../policy/PermissionManager";
+import { setPermissionPromptHandler } from "./permissionPrompt";
+import {
+  setPermission as savePermission,
+  type PermissionMode,
+} from "../config/ProjectConfig";
 import {
   loadInstructions,
   setGlobalInstructions,
@@ -216,6 +221,19 @@ export function Renderer(
   const [showApiForm, setShowApiForm] =
     useState<boolean>(false);
 
+  // Interactive permission prompt — shows when a tool wants to write a file
+  // or run a terminal command (see src/ui/permissionPrompt.ts).
+  const [permissionPrompt, setPermissionPrompt] = useState<{
+    req: PermissionRequest;
+    resolve: (b: boolean) => void;
+  } | null>(null);
+
+  // First-run mode picker — shown when permission.json is missing.
+  const [needsModePick, setNeedsModePick] = useState<boolean>(
+    projectConfig.permission === null
+  );
+  const [modePickIndex, setModePickIndex] = useState<number>(0);
+
   type InstructionPhase = "none" | "scope" | "editor";
   const [instrPhase, setInstrPhase] = useState<InstructionPhase>("none");
   const [instrScope, setInstrScope] = useState<InstructionScope | null>(null);
@@ -226,9 +244,6 @@ export function Renderer(
 
   const sessionLogRef =
     useRef<SessionLog | null>(null);
-
-  const permissionRef =
-    useRef<PermissionManager | null>(null);
 
   // ----------------------------------------------------------------
   // Activity helpers
@@ -251,7 +266,7 @@ export function Renderer(
   );
 
   // ----------------------------------------------------------------
-  // Init: SessionLog + PermissionManager
+  // Init: SessionLog
   // ----------------------------------------------------------------
 
   useEffect(() => {
@@ -282,41 +297,6 @@ export function Renderer(
         });
       }
 
-      // Permission manager — for now, mode comes from ProjectConfig.
-      // If it's null (first run), we defer to "ask-every-time".
-      try {
-        const mode =
-          projectConfig.permission ??
-          "ask-every-time";
-
-        permissionRef.current =
-          new PermissionManager({
-            mode,
-            prompt: async (req) => {
-              // A real prompt requires an overlay input; for now, deny
-              // and surface the reason so the user can switch mode explicitly.
-              pushItem({
-                type: "note",
-                text:
-                  `permission requested (${req.summary}) ` +
-                  `— current mode is "${mode}"`,
-              });
-
-              return mode === "all-allowed";
-            },
-          });
-      } catch (err) {
-        pushItem({
-          type: "error",
-          text:
-            `permission manager init failed: ` +
-            `${
-              err instanceof Error
-                ? err.message
-                : String(err)
-            }`,
-        });
-      }
     })();
 
     return () => {
@@ -324,6 +304,19 @@ export function Renderer(
     };
 
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Register the permission prompt handler so other modules can ask
+  // the user y/n. Cleared on unmount.
+  useEffect(() => {
+    setPermissionPromptHandler((req) => {
+      return new Promise<boolean>((resolve) => {
+        setPermissionPrompt({ req, resolve });
+      });
+    });
+    return () => {
+      setPermissionPromptHandler(null);
+    };
   }, []);
 
   // ----------------------------------------------------------------
@@ -777,23 +770,71 @@ export function Renderer(
   // Ctrl+C — Ink handles exit; we just log
   // ----------------------------------------------------------------
 
-  useInput(
-    (input, key) => {
-      if (
-        key.ctrl &&
-        (input === "c" ||
-          input === "C")
-      ) {
-        if (onExit) {
-          onExit();
-        }
-
-        exit();
+  const pickPermissionMode = useCallback(
+    async (mode: PermissionMode) => {
+      try {
+        await savePermission(projectConfig.cwd, mode);
+        setNeedsModePick(false);
+        pushItem({ type: "note", text: "permission mode set: " + mode });
+      } catch (err) {
+        pushItem({
+          type: "error",
+          text:
+            "failed to save permission mode: " +
+            (err instanceof Error ? err.message : String(err)),
+        });
       }
     },
-    {
-      isActive: true,
-    }
+    [projectConfig.cwd, pushItem]
+  );
+
+  useInput(
+    (input, key) => {
+      // Ctrl+C always exits.
+      if (key.ctrl && (input === "c" || input === "C")) {
+        if (onExit) onExit();
+        exit();
+        return;
+      }
+
+      // Permission y/n prompt takes priority.
+      if (permissionPrompt) {
+        const t = input.trim().toLowerCase();
+        if (t === "y" || t === "yes") {
+          permissionPrompt.resolve(true);
+          setPermissionPrompt(null);
+          return;
+        }
+        if (t === "n" || t === "no" || key.escape) {
+          permissionPrompt.resolve(false);
+          setPermissionPrompt(null);
+          return;
+        }
+        return;
+      }
+
+      // First-run mode picker.
+      if (needsModePick) {
+        if (key.upArrow) {
+          setModePickIndex((i) => Math.max(0, i - 1));
+          return;
+        }
+        if (key.downArrow) {
+          setModePickIndex((i) => Math.min(1, i + 1));
+          return;
+        }
+        if (input === "1") { void pickPermissionMode("all-allowed"); return; }
+        if (input === "2") { void pickPermissionMode("ask-every-time"); return; }
+        if (key.return) {
+          void pickPermissionMode(
+            modePickIndex === 0 ? "all-allowed" : "ask-every-time"
+          );
+          return;
+        }
+        return;
+      }
+    },
+    { isActive: true }
   );
 
   // ----------------------------------------------------------------
@@ -902,12 +943,65 @@ export function Renderer(
         />
       </Box>
 
-      {/* Input box or interactive /api form */}
-      <Box
-        flexDirection="column"
-        marginTop={1}
-      >
-        {instrPhase === "scope" ? (
+      {/* Input box — or an overlay editor/menu/prompt when one is open */}
+      <Box flexDirection="column" marginTop={1}>
+        {needsModePick ? (
+          <Box flexDirection="column" paddingX={1}>
+            <Box>
+              <Text bold color="cyan">
+                {"First run in this project — choose permission mode:"}
+              </Text>
+            </Box>
+            <Box>
+              <Text color={modePickIndex === 0 ? "cyan" : "white"}>
+                {modePickIndex === 0 ? "> " : "  "}
+              </Text>
+              <Text
+                color={modePickIndex === 0 ? "cyan" : "white"}
+                bold={modePickIndex === 0}
+              >
+                {"all-allowed"}
+              </Text>
+              <Text color="gray" dimColor>
+                {"    agent works without asking"}
+              </Text>
+            </Box>
+            <Box>
+              <Text color={modePickIndex === 1 ? "cyan" : "white"}>
+                {modePickIndex === 1 ? "> " : "  "}
+              </Text>
+              <Text
+                color={modePickIndex === 1 ? "cyan" : "white"}
+                bold={modePickIndex === 1}
+              >
+                {"ask-every-time"}
+              </Text>
+              <Text color="gray" dimColor>
+                {"  ask before each file/terminal op"}
+              </Text>
+            </Box>
+            <Box>
+              <Text color="gray" dimColor>
+                {"Up/Down or 1/2    Enter: select"}
+              </Text>
+            </Box>
+          </Box>
+        ) : permissionPrompt ? (
+          <Box flexDirection="column" paddingX={1}>
+            <Box>
+              <Text bold color="yellow">{"permission required"}</Text>
+            </Box>
+            <Box paddingX={2}>
+              <Text>{permissionPrompt.req.summary}</Text>
+            </Box>
+            <Box paddingX={2}>
+              <Text color="cyan" bold>{"Allow? (y/n)"}</Text>
+              <Text color="gray" dimColor>
+                {"   Esc = deny"}
+              </Text>
+            </Box>
+          </Box>
+        ) : instrPhase === "scope" ? (
           <InstructionScopeMenu
             onPick={(scope) => { void handleInstructionScopePick(scope); }}
             onCancel={handleInstructionCancel}
@@ -957,7 +1051,7 @@ export function Renderer(
             slashCommands={
               slashCommands
             }
-            disabled={busy}
+            disabled={busy || permissionPrompt !== null || needsModePick}
             placeholder={
               busy
                 ? "working — input is paused"
