@@ -14,8 +14,7 @@
  * All user-facing text is English.
  */
 
-import * as fs from "fs/promises";
-import * as path from "path";
+
 
 import type { CommandContext } from "../ui/Renderer";
 import { SessionLog } from "../session/SessionLog";
