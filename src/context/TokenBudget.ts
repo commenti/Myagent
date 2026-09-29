@@ -82,10 +82,19 @@ export class TokenBudget {
 
   constructor(opts: TokenBudgetOptions) {
     this.model = opts.model;
+
+    // Priority for the context window:
+    //   1. Explicit override passed by the caller (opts.contextWindowOverride)
+    //   2. Testing override via env var AGENT_CLI_TEST_TOKEN_BUDGET
+    //   3. The model's real window from CapabilityRegistry
+    const envOverride = readEnvContextWindow();
     this.contextWindow =
       opts.contextWindowOverride && opts.contextWindowOverride > 0
         ? opts.contextWindowOverride
+        : envOverride !== null
+        ? envOverride
         : getContextWindow(opts.model);
+
     const t = opts.compactionThreshold ?? DEFAULT_COMPACTION_THRESHOLD;
     this.compactionThreshold = clamp01(t);
   }
@@ -209,6 +218,24 @@ export function estimateTokensMany(parts: readonly string[]): number {
   let total = 0;
   for (const p of parts) total += estimateTokens(p);
   return total;
+}
+
+
+// ------------------------------------------------------------------
+// Testing override (env var)
+// ------------------------------------------------------------------
+// AGENT_CLI_TEST_TOKEN_BUDGET — if set to a positive integer, the context
+// window is clamped to that many tokens. Intended ONLY for testing the
+// Compaction / Summarizer path with a realistic-length conversation, without
+// waiting for the real 128k+ window to fill. Never set by the CLI itself.
+// ------------------------------------------------------------------
+
+function readEnvContextWindow(): number | null {
+  const raw = process.env.AGENT_CLI_TEST_TOKEN_BUDGET;
+  if (!raw || raw.trim().length === 0) return null;
+  const n = Number.parseInt(raw.trim(), 10);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n;
 }
 
 

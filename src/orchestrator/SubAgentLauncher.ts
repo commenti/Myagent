@@ -39,6 +39,36 @@ const MAX_MAP_FILES = 150;
 const DEFAULT_MAX_OUTPUT_TOKENS = 1_500;
 const DEFAULT_TIMEOUT_MS = 180_000;
 
+// ------------------------------------------------------------------
+// Hard caps — code-level guarantees, never delegated to the model
+// ------------------------------------------------------------------
+
+const HARD_MAX_TOTAL_SUBAGENTS = 4;          // per process / session
+const HARD_MAX_TOKENS_PER_SUBAGENT = 8_000;  // per launch
+const HARD_MAX_STEPS_PER_SUBAGENT = 12;      // per launch (informational)
+
+
+// ------------------------------------------------------------------
+// Session-wide sub-agent counter
+// ------------------------------------------------------------------
+// Sub-agents are opt-in. The launcher refuses to run once the session cap
+// is reached, so a mistaken caller cannot exhaust the budget silently.
+// ------------------------------------------------------------------
+
+let launchedThisSession = 0;
+
+export function resetSubAgentBudget(): void {
+  launchedThisSession = 0;
+}
+
+export function subAgentsUsed(): number {
+  return launchedThisSession;
+}
+
+export function subAgentsRemaining(): number {
+  return Math.max(0, HARD_MAX_TOTAL_SUBAGENTS - launchedThisSession);
+}
+
 
 // ------------------------------------------------------------------
 // Public types
@@ -73,6 +103,14 @@ export interface SubAgentLaunchOptions {
   readonly adapter: ProviderAdapter;
   readonly adapterConfig: AdapterConfig;
   readonly reason: SubAgentReason;
+  /**
+   * MUST be `true`. The launcher refuses to run without it, which makes it
+   * impossible for a caller to launch a sub-agent silently. Set this only
+   * after the user has explicitly said yes to a proposal.
+   */
+  readonly userConfirmed: true;
+  /** Optional slot id when this launch is part of a proposal. */
+  readonly slotId?: string;
   readonly maxOutputTokens?: number;
   readonly timeoutMs?: number;
   readonly signal?: AbortSignal;
@@ -92,6 +130,36 @@ export interface SubAgentResult {
   readonly error?: string;
 }
 
+// ------------------------------------------------------------------
+// Proposal — describes a set of sub-agents WITHOUT launching any
+// ------------------------------------------------------------------
+
+export interface SubAgentSlot {
+  readonly id: string;                    // "sa-1", "sa-2", ...
+  readonly title: string;                 // short imperative
+  readonly files: readonly string[];      // non-overlapping set
+  readonly folders: readonly string[];    // top-level dirs derived from files
+  readonly estimatedTokens: number;       // upper bound per slot
+  readonly maxSteps: number;              // step cap per slot
+}
+
+export interface SubAgentProposal {
+  readonly reason: SubAgentReason;
+  readonly slots: readonly SubAgentSlot[];
+  readonly totalEstimatedTokens: number;
+  /** Ready-to-show yes/no question. */
+  readonly question: string;
+}
+
+export interface PlanSubAgentsInput {
+  readonly taskTitle: string;
+  readonly files: readonly string[];
+  readonly reason: SubAgentReason;
+  readonly maxSlots?: number;
+  readonly tokensPerSubagent?: number;
+  readonly stepsPerSubagent?: number;
+}
+
 
 /**
  * Injection point for tests / alternate transports.
@@ -100,7 +168,12 @@ export interface SubAgentResult {
 export type SubAgentFn = (req: ChatRequest) => Promise<string>;
 
 export class SubAgentLaunchError extends Error {
-  public readonly code: "empty_brief" | "model_error" | "timeout";
+  public readonly code:
+    | "empty_brief"
+    | "model_error"
+    | "timeout"
+    | "not_confirmed"
+    | "budget_exhausted";
   constructor(code: SubAgentLaunchError["code"], message: string) {
     super(message);
     this.name = "SubAgentLaunchError";
@@ -174,6 +247,145 @@ export function decideLaunch(input: DecideInput): LaunchDecision {
     reason: null,
     explanation: "task is small and coupled to the current context — running inline",
   };
+}
+
+// ------------------------------------------------------------------
+// Planning — split files by top-level folder so slots never overlap
+// ------------------------------------------------------------------
+
+function bucketByTopFolder(files: readonly string[]): Map<string, string[]> {
+  const map = new Map<string, string[]>();
+  for (const f of files) {
+    const seg = f.split("/")[0] || ".";
+    const list = map.get(seg);
+    if (list) list.push(f);
+    else map.set(seg, [f]);
+  }
+  return map;
+}
+
+/**
+ * Build a proposal. Nothing is launched here — this is a pure description
+ * of what COULD be launched, ready to show the user for a yes/no.
+ *
+ * Guarantees:
+ *   - slots never share files (they are bucketed by top-level folder)
+ *   - total slots ≤ HARD_MAX_TOTAL_SUBAGENTS
+ *   - per-slot tokens ≤ HARD_MAX_TOKENS_PER_SUBAGENT
+ *   - per-slot steps ≤ HARD_MAX_STEPS_PER_SUBAGENT
+ */
+export function planSubAgents(input: PlanSubAgentsInput): SubAgentProposal {
+  const maxSlots = Math.max(
+    1,
+    Math.min(
+      input.maxSlots ?? HARD_MAX_TOTAL_SUBAGENTS,
+      HARD_MAX_TOTAL_SUBAGENTS
+    )
+  );
+  const perTokens = Math.max(
+    500,
+    Math.min(
+      input.tokensPerSubagent ?? 4_000,
+      HARD_MAX_TOKENS_PER_SUBAGENT
+    )
+  );
+  const perSteps = Math.max(
+    1,
+    Math.min(
+      input.stepsPerSubagent ?? 6,
+      HARD_MAX_STEPS_PER_SUBAGENT
+    )
+  );
+
+  const buckets = bucketByTopFolder(input.files);
+  const slots: SubAgentSlot[] = [];
+  let idx = 0;
+
+  for (const entry of buckets) {
+    const folder = entry[0];
+    const files = entry[1];
+
+    if (slots.length >= maxSlots) {
+      // Fold any remaining files into the last slot rather than dropping them.
+      const last = slots[slots.length - 1];
+      const mergedFiles = [...last.files, ...files];
+      slots[slots.length - 1] = {
+        id: last.id,
+        title: last.title,
+        files: mergedFiles,
+        folders: last.folders,
+        estimatedTokens: Math.min(
+          HARD_MAX_TOKENS_PER_SUBAGENT,
+          last.estimatedTokens + perTokens
+        ),
+        maxSteps: last.maxSteps,
+      };
+      continue;
+    }
+
+    idx++;
+    slots.push({
+      id: "sa-" + idx,
+      title: input.taskTitle + " (" + folder + ")",
+      files: [...files],
+      folders: [folder],
+      estimatedTokens: perTokens,
+      maxSteps: perSteps,
+    });
+  }
+
+  if (slots.length === 0) {
+    // No files known — a single text-only slot is still useful.
+    slots.push({
+      id: "sa-1",
+      title: input.taskTitle,
+      files: [],
+      folders: [],
+      estimatedTokens: perTokens,
+      maxSteps: perSteps,
+    });
+  }
+
+  const total = slots.reduce((n, s) => n + s.estimatedTokens, 0);
+
+  return {
+    reason: input.reason,
+    slots,
+    totalEstimatedTokens: total,
+    question:
+      "This looks like a large task. Split it into " +
+      slots.length +
+      " sub-agent(s)? Each will work on its own folder — no overlap. " +
+      "Estimated tokens: ~" +
+      total +
+      ".  (yes / no)",
+  };
+}
+
+/** Human-readable rendering of a proposal for the confirmation prompt. */
+export function renderProposal(proposal: SubAgentProposal): string {
+  const lines: string[] = [];
+  lines.push(proposal.question);
+  lines.push("");
+  for (const s of proposal.slots) {
+    const scope =
+      s.folders.length > 0 ? s.folders.join(", ") : "(no files — text-only)";
+    lines.push(
+      "  " +
+        s.id +
+        ": " +
+        s.title +
+        "   scope=" +
+        scope +
+        "   files=" +
+        s.files.length +
+        "   ~tokens=" +
+        s.estimatedTokens +
+        "   maxSteps=" +
+        s.maxSteps
+    );
+  }
+  return lines.join("\n");
 }
 
 
@@ -289,9 +501,30 @@ export async function launchSubAgent(
 ): Promise<SubAgentResult> {
   const started = Date.now();
 
+  // Refuse to run without an explicit user confirmation.
+  if (opts.userConfirmed !== true) {
+    throw new SubAgentLaunchError(
+      "not_confirmed",
+      "sub-agent launch refused: explicit user confirmation is required"
+    );
+  }
+
+  // Refuse to run once the session cap is reached.
+  if (launchedThisSession >= HARD_MAX_TOTAL_SUBAGENTS) {
+    throw new SubAgentLaunchError(
+      "budget_exhausted",
+      "sub-agent budget exhausted (" +
+        HARD_MAX_TOTAL_SUBAGENTS +
+        " per session)"
+    );
+  }
+
   if (!opts.brief.taskTitle || opts.brief.taskTitle.trim().length === 0) {
     throw new SubAgentLaunchError("empty_brief", "sub-agent brief has no taskTitle");
   }
+
+  // Count this launch against the session budget before any work begins.
+  launchedThisSession++;
 
   const systemPrompt = buildSystemPrompt(opts.reason);
   const userPrompt = buildUserPrompt(opts);
@@ -301,10 +534,17 @@ export async function launchSubAgent(
     { role: "user", parts: [{ kind: "text", text: userPrompt }] },
   ];
 
+  // Per-launch token cap — enforced in code, never left to the caller.
+  const requestedTokens = opts.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
+  const effectiveTokens = Math.max(
+    128,
+    Math.min(requestedTokens, HARD_MAX_TOKENS_PER_SUBAGENT)
+  );
+
   const req: ChatRequest = {
     model: opts.adapterConfig.model,
     messages,
-    maxOutputTokens: opts.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
+    maxOutputTokens: effectiveTokens,
     ...(opts.signal ? { signal: opts.signal } : {}),
   };
 

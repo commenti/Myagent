@@ -30,9 +30,8 @@ import type { Task, TaskGraph } from "./TaskGraph";
 import type { VerifyKind, VerifyReport } from "../tools/VerifyRunner";
 import { runVerification } from "../tools/VerifyRunner";
 import type { EscalationDecision, EscalationLadder } from "../recovery/EscalationLadder";
-import { buildEscalationBrief } from "../recovery/EscalationLadder";
-import type { SubAgentResult, SubAgentLaunchOptions } from "./SubAgentLauncher";
-import { launchSubAgent } from "./SubAgentLauncher";
+import type { SubAgentResult, SubAgentBrief } from "./SubAgentLauncher";
+import { launchSubAgent, planSubAgents, renderProposal } from "./SubAgentLauncher";
 import type { SessionLog } from "../session/SessionLog";
 import type { MemoryStore } from "../memory/MemoryStore";
 import type { PermissionManager } from "../policy/PermissionManager";
@@ -350,46 +349,85 @@ export class StateMachine {
           });
         }
 
-        // Launch a fresh-context sub-agent for debug.
-        const brief = buildEscalationBrief({
+        // Build a proposal — nothing is launched until the user says yes.
+        const proposal = planSubAgents({
           taskTitle: task.title,
           files: task.files,
-          currentError: lastOutput,
-          previousApproach: lastApproach,
-          decision,
-        });
-        const launchOpts: SubAgentLaunchOptions = {
-          cwd: this.opts.cwd,
-          repoMap: this.opts.repoMap,
-          brief,
-          adapter: this.opts.subAgent.adapter,
-          adapterConfig: this.opts.subAgent.adapterConfig,
           reason: "recovery",
-        };
-        let subResult: SubAgentResult;
-        try {
-          subResult = await launchSubAgent(launchOpts);
-        } catch (err) {
-          subResult = {
-            ok: false,
-            summary: `sub-agent threw: ${err instanceof Error ? err.message : String(err)}`,
-            raw: "",
-            estimatedTokens: 0,
-            durationMs: 0,
-            reason: "recovery",
-            error: err instanceof Error ? err.message : String(err),
-          };
-        }
-        this.emit({ type: "subagent-launched", task, result: subResult });
+        });
+        const proposalText = renderProposal(proposal);
+        this.emit({ type: "note", text: proposalText });
 
-        // Feed the sub-agent's summary into the next attempt as context.
-        if (subResult.ok) {
-          mustChangeApproach = true;
-          lastApproach = `after sub-agent: ${subResult.summary}`.slice(0, 400);
+        let answer = "no";
+        if (this.opts.askUser) {
+          try {
+            answer = await this.opts.askUser(
+              proposalText + "\n\nLaunch these sub-agents?"
+            );
+          } catch {
+            answer = "no";
+          }
+        }
+        const yes = /^\s*(y|yes|ok|haan|haa|हाँ|हां)\b/i.test(answer);
+
+        if (!yes) {
+          this.emit({ type: "note", text: "sub-agent proposal declined by user" });
+          lastOutput = lastOutput + "\n[sub-agent proposal declined]";
           continue;
         }
-        // Sub-agent failed too — fall through to ask-user on the next decision.
-        lastOutput = lastOutput + "\n" + subResult.summary;
+
+        // Launch each slot — non-overlapping scopes, per-slot caps enforced
+        // inside launchSubAgent.
+        let anyOk = false;
+        for (const slot of proposal.slots) {
+          const brief: SubAgentBrief = {
+            taskTitle: slot.title,
+            files: slot.files.length > 0 ? slot.files : task.files,
+            failureContext: lastOutput,
+            ...(lastApproach ? { previousApproach: lastApproach } : {}),
+          };
+
+          let subResult: SubAgentResult;
+          try {
+            subResult = await launchSubAgent({
+              cwd: this.opts.cwd,
+              repoMap: this.opts.repoMap,
+              brief,
+              adapter: this.opts.subAgent.adapter,
+              adapterConfig: this.opts.subAgent.adapterConfig,
+              reason: "recovery",
+              userConfirmed: true,
+              slotId: slot.id,
+              maxOutputTokens: slot.estimatedTokens,
+            });
+          } catch (err) {
+            subResult = {
+              ok: false,
+              summary:
+                "sub-agent launch failed: " +
+                (err instanceof Error ? err.message : String(err)),
+              raw: "",
+              estimatedTokens: 0,
+              durationMs: 0,
+              reason: "recovery",
+              error: err instanceof Error ? err.message : String(err),
+            };
+          }
+
+          this.emit({ type: "subagent-launched", task, result: subResult });
+          if (subResult.ok) {
+            anyOk = true;
+            lastApproach = ("after sub-agent " + slot.id + ": " + subResult.summary).slice(0, 400);
+          } else {
+            lastOutput = lastOutput + "\n" + subResult.summary;
+          }
+        }
+
+        if (anyOk) {
+          mustChangeApproach = true;
+          continue;
+        }
+        // All sub-agents failed — fall through; next decision likely asks the user.
         continue;
       }
 

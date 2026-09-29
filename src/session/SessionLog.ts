@@ -217,6 +217,37 @@ export class SessionLog {
     return { entries: all.length, bytes };
   }
 
+  /** Truncate current.jsonl to empty and reset the seq counter. */
+  public async clearCurrent(): Promise<void> {
+    const tmp = this.paths.currentSessionFile + ".tmp";
+    try {
+      await fs.writeFile(tmp, "", "utf8");
+      await fs.rename(tmp, this.paths.currentSessionFile);
+    } catch (err) {
+      try { await fs.unlink(tmp); } catch { /* ignore */ }
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new SessionLogError("io_error", "clearCurrent failed: " + msg);
+    }
+    this.seqCounter = 0;
+  }
+
+  /** Delete every archive file and reset archive_index.json to []. */
+  public async clearArchives(): Promise<void> {
+    try {
+      const entries = await fs.readdir(this.paths.archiveDir, { withFileTypes: true });
+      for (const e of entries) {
+        if (!e.isFile()) continue;
+        try { await fs.unlink(path.join(this.paths.archiveDir, e.name)); } catch { /* skip */ }
+      }
+    } catch (err) {
+      if ((err as { code?: string }).code !== "ENOENT") {
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new SessionLogError("io_error", "clearArchives failed: " + msg);
+      }
+    }
+    await this.writeIndex([]);
+  }
+
 
   // ----------------------------------------------------------------
   // Archive

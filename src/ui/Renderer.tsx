@@ -51,6 +51,7 @@ import { PermissionManager } from "../policy/PermissionManager";
 import { saveAndActivate } from "../commands/apiCommand";
 import { InstructionScopeMenu, type InstructionScope } from "./InstructionScopeMenu";
 import { InstructionEditor } from "./InstructionEditor";
+import { run as runClear } from "../commands/clearCommand";
 import {
   loadInstructions,
   setGlobalInstructions,
@@ -151,6 +152,11 @@ const SLASH_COMMANDS: readonly SlashCommand[] = [
     name: "cost",
     description: "show token usage and cost",
     usage: "/cost",
+  },
+  {
+    name: "clear",
+    description: "delete saved session history",
+    usage: "/clear [yes [all]]",
   },
   {
     name: "verbose",
@@ -498,6 +504,10 @@ export function Renderer(
                 );
               break;
 
+            case "clear":
+              result = await runClear(ctx, args);
+              break;
+
             default:
               result =
                 `unknown command: /${name}`;
@@ -546,6 +556,23 @@ export function Renderer(
       ): Promise<void> => {
         if (resumeShown) {
           setResumeShown(false);
+          // Restore prior conversation visually, so the user sees what was
+          // saved instead of a blank screen after restart.
+          try {
+            const log = sessionLogRef.current;
+            if (log) {
+              const tail = await log.readTail(20);
+              for (const e of tail) {
+                if (e.kind === "user") {
+                  pushItem({ type: "user-message", text: e.text });
+                } else if (e.kind === "assistant") {
+                  pushItem({ type: "assistant-message", text: e.text });
+                }
+              }
+            }
+          } catch {
+            // non-fatal
+          }
         }
 
         setBusy(true);
@@ -556,21 +583,6 @@ export function Renderer(
           type: "user-message",
           text,
         });
-
-        // Best-effort: log the user message into the session.
-        try {
-          const log =
-            sessionLogRef.current;
-
-          if (log) {
-            await log.append({
-              kind: "user",
-              text,
-            });
-          }
-        } catch {
-          // non-fatal
-        }
 
         try {
           if (onUserMessage) {
