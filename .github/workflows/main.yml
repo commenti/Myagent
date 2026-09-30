@@ -1,0 +1,104 @@
+name: Test Build
+
+# कब चलेगा: हर push पर (किसी भी branch पर), और manually भी चला सकते हैं
+on:
+  push:
+    branches: [ "**" ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. रिपॉज़िटरी का कोड checkout करना
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 2. Node.js सेटअप करना (टेस्ट, अलग-अलग version चाहें तो यहाँ बदलें)
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # 3. Environment जानकारी (debug के लिए काम आता है)
+      - name: Show environment info
+        run: |
+          echo "Node version:" && node -v
+          echo "NPM version:" && npm -v
+          echo "OS info:" && uname -a
+        continue-on-error: true
+
+      # 4. Dependencies इंस्टॉल करना — जो भी error आए, पूरा output log फ़ाइल में सेव
+      - name: Install dependencies
+        id: install
+        run: |
+          npm install 2>&1 | tee install-log.txt
+          exit ${PIPESTATUS[0]}
+        continue-on-error: true
+
+      # 5. अगर package.json में "build" script मौजूद है, तभी build चलाओ
+      - name: Build (if build script exists)
+        id: build
+        run: |
+          if npm run | grep -q "build"; then
+            npm run build 2>&1 | tee build-log.txt
+            exit ${PIPESTATUS[0]}
+          else
+            echo "कोई build script नहीं मिला — skip किया गया" | tee build-log.txt
+          fi
+        continue-on-error: true
+
+      # 6. अगर package.json में "test" script मौजूद है, तभी test चलाओ
+      - name: Run tests (if test script exists)
+        id: test
+        run: |
+          if npm run | grep -q "test"; then
+            npm test 2>&1 | tee test-log.txt
+            exit ${PIPESTATUS[0]}
+          else
+            echo "कोई test script नहीं मिला — skip किया गया" | tee test-log.txt
+          fi
+        continue-on-error: true
+
+      # 7. TypeScript compile-check अगर tsconfig.json मौजूद है (सिर्फ़ type-error पकड़ने के लिए, चाहें तो हटा सकते हैं)
+      - name: TypeScript check (if tsconfig.json exists)
+        id: typecheck
+        run: |
+          if [ -f "tsconfig.json" ]; then
+            npx tsc --noEmit 2>&1 | tee typecheck-log.txt
+            exit ${PIPESTATUS[0]}
+          else
+            echo "tsconfig.json नहीं मिला — skip किया गया" | tee typecheck-log.txt
+          fi
+        continue-on-error: true
+
+      # 8. सारे logs एक फ़ोल्डर में इकट्ठा करना — चाहे pass हो या fail, यह हमेशा चलेगा
+      - name: Collect all logs
+        if: always()
+        run: |
+          mkdir -p logs
+          cp install-log.txt logs/ 2>/dev/null || echo "install-log नहीं मिला"
+          cp build-log.txt logs/ 2>/dev/null || echo "build-log नहीं मिला"
+          cp test-log.txt logs/ 2>/dev/null || echo "test-log नहीं मिला"
+          cp typecheck-log.txt logs/ 2>/dev/null || echo "typecheck-log नहीं मिला"
+          echo "--- Summary ---" > logs/summary.txt
+          echo "Install step: ${{ steps.install.outcome }}" >> logs/summary.txt
+          echo "Build step:   ${{ steps.build.outcome }}" >> logs/summary.txt
+          echo "Test step:    ${{ steps.test.outcome }}" >> logs/summary.txt
+          echo "Typecheck step: ${{ steps.typecheck.outcome }}" >> logs/summary.txt
+      # 9. सारे logs को ZIP artifact के रूप में अपलोड करना — GitHub इसे download करते वक़्त अपने-आप .zip बना देता है
+      - name: Upload logs as downloadable zip
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs
+          path: logs/
+          retention-days: 14
+
+      # 10. अगर install/build/test/typecheck में से कोई भी असल में fail हुआ हो, तो पूरी job को लाल (failed) दिखाओ
+      - name: Mark job as failed if any step failed
+        if: steps.install.outcome == 'failure' || steps.build.outcome == 'failure' || steps.test.outcome == 'failure' || steps.typecheck.outcome == 'failure'
+        run: |
+          echo "एक या ज़्यादा स्टेप fail हुए — नीचे 'test-logs' artifact डाउनलोड करके देखें"
+          exit 1
