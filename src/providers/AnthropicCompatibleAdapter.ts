@@ -33,7 +33,7 @@ import { getCapabilities } from "./CapabilityRegistry";
 
 const ANTHROPIC_VERSION = "2023-06-01";
 const DEFAULT_TIMEOUT_MS = 120_000;
-const HANDSHAKE_TIMEOUT_MS = 20_000;
+const HANDSHAKE_TIMEOUT_MS = 60_000;
 const DEFAULT_MAX_OUTPUT = 4_096;
 
 // ------------------------------------------------------------------
@@ -360,7 +360,7 @@ export class AnthropicCompatibleAdapter implements ProviderAdapter {
         headers: this.headers(config.apiKey, false),
         body: JSON.stringify({
           model: config.model,
-          max_tokens: 1,
+          max_tokens: 16,
           messages: [
             {
               role: "user",
@@ -749,4 +749,4 @@ function extractData(frame: string): string | null {
   if (dataLines.length === 0) return null;
 
   return dataLines.join("\n");
-}
+  }
