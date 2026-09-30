@@ -228,10 +228,10 @@ export function Renderer(
     resolve: (b: boolean) => void;
   } | null>(null);
 
-  // First-run mode picker — shown when permission.json is missing.
-  const [needsModePick, setNeedsModePick] = useState<boolean>(
-    projectConfig.permission === null
-  );
+  // Permission mode picker — shown on EVERY launch so the user actively
+  // consents each session. The saved permission.json is only a hint; it is
+  // never used to skip this prompt.
+  const [needsModePick, setNeedsModePick] = useState<boolean>(true);
   const [modePickIndex, setModePickIndex] = useState<number>(0);
 
   type InstructionPhase = "none" | "scope" | "editor";
@@ -813,7 +813,7 @@ export function Renderer(
         return;
       }
 
-      // First-run mode picker.
+      // Permission mode picker — required on every launch.
       if (needsModePick) {
         if (key.upArrow) {
           setModePickIndex((i) => Math.max(0, i - 1));
@@ -949,7 +949,7 @@ export function Renderer(
           <Box flexDirection="column" paddingX={1}>
             <Box>
               <Text bold color="cyan">
-                {"First run in this project — choose permission mode:"}
+                {"Choose permission mode for this session:"}
               </Text>
             </Box>
             <Box>
@@ -1062,4 +1062,4 @@ export function Renderer(
       </Box>
     </Box>
   );
-}
+                }
