@@ -90,7 +90,7 @@ interface MappingFile {
 
 const SUPPORTED_VERSION = 1;
 const DEFAULT_TIMEOUT_MS = 120_000;
-const HANDSHAKE_TIMEOUT_MS = 20_000;
+const HANDSHAKE_TIMEOUT_MS = 60_000;
 
 
 // ------------------------------------------------------------------
@@ -694,8 +694,15 @@ function mapFinish(
 
 function isAbort(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
-  const e = err as { name?: string; code?: string };
-  return e.name === "AbortError" || e.code === "ABORT_ERR";
+  const e = err as { name?: unknown; code?: unknown; message?: unknown };
+  if (e.name === "AbortError") return true;
+  if (e.code === "ABORT_ERR") return true;
+  if (e.code === "UND_ERR_ABORTED") return true;
+  if (e.code === 20) return true;
+  if (typeof e.message === "string" && e.message.toLowerCase().includes("aborted")) {
+    return true;
+  }
+  return false;
 }
 
 async function safeJson(res: Response): Promise<unknown> {

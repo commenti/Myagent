@@ -64,6 +64,26 @@ export class ProviderError extends Error {
 
 
 // ------------------------------------------------------------------
+// Abort detection (handles DOMException from fetch, undici errors,
+// and Node's various abort shapes)
+// ------------------------------------------------------------------
+
+export function isAbortError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as { name?: unknown; code?: unknown; message?: unknown };
+  if (e.name === "AbortError") return true;
+  if (e.code === "ABORT_ERR") return true;
+  if (e.code === "UND_ERR_ABORTED") return true;
+  if (e.code === 20) return true;
+  if (typeof e.message === "string") {
+    const m = e.message.toLowerCase();
+    if (m.includes("aborted")) return true;
+    if (m.includes("operation was aborted")) return true;
+  }
+  return false;
+}
+
+// ------------------------------------------------------------------
 // Retry guidance
 // ------------------------------------------------------------------
 
@@ -238,10 +258,21 @@ export function classifyProviderError(input: ClassifyInput): ProviderError {
     type = "network_error";
   }
 
-  const message =
+  let message =
     extractMessage(body) ??
     (cause instanceof Error ? cause.message : null) ??
-    (status !== undefined ? `HTTP ${status}` : "provider error");
+    (status !== undefined ? "HTTP " + status : null);
+
+  if (!message || message.trim().length === 0) {
+    try {
+      const raw = cause !== undefined ? cause : body;
+      const str = typeof raw === "string" ? raw : JSON.stringify(raw);
+      if (str && str !== "{}" && str !== "null" && str !== "undefined") {
+        message = "unclassified provider error: " + str.slice(0, 300);
+      }
+    } catch { /* ignore */ }
+  }
+  if (!message || message.trim().length === 0) message = "provider error";
 
   return new ProviderError({
     type,
@@ -258,8 +289,29 @@ export function classifyProviderError(input: ClassifyInput): ProviderError {
  */
 export function normalizeError(err: unknown): ProviderError {
   if (err instanceof ProviderError) return err;
+
+  // Catch any abort shape (DOMException, undici error, Node timeout).
+  if (isAbortError(err)) {
+    return new ProviderError({
+      type: "network_error",
+      message: "request was aborted or timed out",
+      cause: err,
+      retryable: true,
+    });
+  }
+
   if (err instanceof Error) {
     return classifyProviderError({ cause: err });
   }
+
+  // Non-Error object (DOMException, undici error, plain object).
+  if (err && typeof err === "object") {
+    const o = err as { name?: unknown; message?: unknown };
+    const name = typeof o.name === "string" ? o.name : "unknown";
+    const msg = typeof o.message === "string" ? o.message : "";
+    const wrapped = new Error(name + (msg ? ": " + msg : ""));
+    return classifyProviderError({ cause: wrapped, body: err });
+  }
+
   return classifyProviderError({ body: err });
 }
