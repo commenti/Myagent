@@ -472,7 +472,9 @@ function buildTurnRunner(
   "Never claim a file was created, edited, or deleted unless the matching " +
   "tool actually succeeded in this turn. If a tool failed, say so plainly and " +
   "try a different approach or ask the user.\n\n" +
-  "You are in control of how to handle each turn. Use the tools as you see fit:\n" +
+  "You are in control of how to handle each turn. Use the tools as you see fit:\n";
+  
+  
     try {
       const agents = await loadAgentsMd(cwd);
       if (agents.content.trim().length > 0) systemPrompt += "\n\n" + agents.content;
