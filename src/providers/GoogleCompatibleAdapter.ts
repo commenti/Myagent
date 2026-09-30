@@ -35,7 +35,7 @@ import { getCapabilities } from "./CapabilityRegistry";
 
 const API_VERSION = "v1beta";
 const DEFAULT_TIMEOUT_MS = 120_000;
-const HANDSHAKE_TIMEOUT_MS = 20_000;
+const HANDSHAKE_TIMEOUT_MS = 60_000;
 
 
 // ------------------------------------------------------------------
@@ -370,7 +370,7 @@ export class GoogleCompatibleAdapter implements ProviderAdapter {
             },
           ],
           generationConfig: {
-            maxOutputTokens: 1,
+            maxOutputTokens: 16,
           },
         }),
         signal: controller.signal,
@@ -729,4 +729,4 @@ function extractData(frame: string): string | null {
   if (dataLines.length === 0) return null;
 
   return dataLines.join("\n");
-}
+  }
