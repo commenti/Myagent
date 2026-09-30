@@ -64,7 +64,7 @@ interface OaiRequestBody {
 // ------------------------------------------------------------------
 
 const DEFAULT_TIMEOUT_MS = 120_000;
-const HANDSHAKE_TIMEOUT_MS = 20_000;
+const HANDSHAKE_TIMEOUT_MS = 60_000;
 
 export class OpenAICompatibleAdapter implements ProviderAdapter {
   public readonly id = "openai-compatible";
@@ -232,12 +232,15 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          Accept: "application/json",
           Authorization: `Bearer ${config.apiKey}`,
         },
         body: JSON.stringify({
           model: config.model,
           messages: [{ role: "user", content: "hi" }],
-          max_tokens: 1,
+          // 16, not 1: reasoning models need headroom to "think" before
+          // replying; max_tokens: 1 can stall them indefinitely.
+          max_tokens: 16,
           stream: false,
         }),
         signal: controller.signal,
@@ -254,6 +257,15 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
       // Success — drain and discard.
       await res.text();
     } catch (err) {
+      if (isAbort(err)) {
+        throw classifyProviderError({
+          body:
+            "handshake timed out after " +
+            Math.round(HANDSHAKE_TIMEOUT_MS / 1000) +
+            "s — the endpoint did not respond in time. " +
+            "Try a faster model, or check the base URL.",
+        });
+      }
       throw normalizeError(err);
     } finally {
       clearTimeout(timer);
@@ -581,4 +593,4 @@ function extractData(frame: string): string | null {
   if (dataLines.length === 0) return null;
 
   return dataLines.join("\n");
-}
+          }
