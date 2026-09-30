@@ -598,6 +598,12 @@ function buildTurnRunner(
             const planText = flat.length === 0
               ? "(planner returned no steps)"
               : flat.map((x) => "[" + x.phase + "] " + x.step.title).join("\n");
+            emit({
+              type: "tool-result",
+              name: "plan",
+              ok: true,
+              summary: flat.length + " step(s) planned",
+            });
             messages.push({
               role: "tool",
               toolCallId: tc.id,
@@ -607,6 +613,12 @@ function buildTurnRunner(
             try { await sessionLog.append({ kind: "tool-result", id: tc.id, name: "plan", ok: true, summary: "plan ready" }); } catch { /* non-fatal */ }
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
+            emit({
+              type: "tool-result",
+              name: "plan",
+              ok: false,
+              summary: msg,
+            });
             messages.push({
               role: "tool",
               toolCallId: tc.id,
@@ -618,6 +630,12 @@ function buildTurnRunner(
 
         // All other tools.
         const r = await executeTool(tc.name, tc.argsJson, toolCtx);
+        emit({
+          type: "tool-result",
+          name: tc.name,
+          ok: r.ok,
+          summary: r.summary,
+        });
         messages.push({
           role: "tool",
           toolCallId: tc.id,
